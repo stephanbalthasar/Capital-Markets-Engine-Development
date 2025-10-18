@@ -545,8 +545,8 @@ with colA:
 
             # Metrics
             m1, m2 = st.columns(2)
-            m2.metric("Issue Coverage", f"{rubric['coverage_pct']}%")
-            m3.metric("Overall Score", f"{rubric['final_score']}%")
+            m1.metric("Issue Coverage", f"{rubric['coverage_pct']}%")
+            m2.metric("Overall Score", f"{rubric['final_score']}%")
 
             # Breakdown
             with st.expander("🔬 Issue-by-issue breakdown"):

@@ -516,8 +516,8 @@ with st.sidebar:
             st.exception(e)
 
 # Main UI
+st.image("assets/logo.png", width=240)
 st.title("⚖️ EUCapML Case Tutor")
-st.caption("Model answer prevails in doubt. Sources: EUR‑Lex, CURIA, ESMA, BaFin, Gesetze‑im‑Internet.")
 
 with st.expander("📚 Case (click to read)"):
     st.write(CASE)

@@ -427,6 +427,16 @@ def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_blo
     msgs.append({"role": "system", "content": "RELEVANT EXCERPTS (quote sparingly):\n" + excerpts_block})
     return msgs
 
+# ------------------------------ Chat Helper ----------
+def render_sources_used(source_lines: list[str]) -> None:
+    with st.expander("📚 Sources used", expanded=False):
+        if not source_lines:
+            st.write("— no web sources available —")
+            return
+        for line in source_lines:
+            st.markdown(f"- {line}")
+
+
 # ---------------- UI ----------------
 import streamlit as st
 import os
@@ -589,10 +599,12 @@ with colB:
 
     # 2) Render prior messages
     for msg in st.session_state.chat_history:
-        if msg["role"] in ("user", "assistant"):
-            with st.chat_message(msg["role"]):
-                st.write(msg["content"])
-
+    if msg["role"] in ("user", "assistant"):
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+            if msg["role"] == "assistant":
+                render_sources_used(msg.get("sources", []))  # NEW: per-message sources
+        
     # 3) Persistent composer (replaces st.chat_input which clears after send)
     if "chat_draft" not in st.session_state:
         st.session_state.chat_draft = ""   # persists across reruns until user clears

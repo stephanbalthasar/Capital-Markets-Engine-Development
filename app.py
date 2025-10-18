@@ -429,7 +429,12 @@ import streamlit as st
 import os
 import requests
 
-st.set_page_config(page_title="EUCapML Case Tutor", page_icon="⚖️", layout="wide")
+st.set_page_config(
+    page_title="EUCapML Case Tutor", 
+    page_icon="⚖️", 
+    layout="wide"
+    initial_sidebar_state="collapsed",   # ← collapsed by default
+)
 
 # Student login
 if "authenticated" not in st.session_state:

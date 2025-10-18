@@ -594,7 +594,7 @@ with colB:
             top_pages, source_lines = [], []
             if enable_web:
                 pages = collect_corpus(student_answer, user_q, max_fetch=20)
-                top_pages, source_lines = retrieve_snippets(
+                top_pages, source_lines = retrieve_snippets_with_manual(
                     (student_answer or "") + "\n\n" + user_q,
                     MODEL_ANSWER, pages, backend, top_k_pages=max_sources, chunk_words=170
                 )

@@ -517,7 +517,7 @@ with st.sidebar:
 
 # Main UI
 st.image("assets/logo.png", width=240)
-st.title("⚖️ EUCapML Case Tutor")
+st.title("EUCapML Case Tutor")
 
 with st.expander("📚 Case (click to read)"):
     st.write(CASE)

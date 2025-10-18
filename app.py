@@ -432,7 +432,7 @@ import requests
 st.set_page_config(
     page_title="EUCapML Case Tutor", 
     page_icon="⚖️", 
-    layout="wide"
+    layout="wide",
     initial_sidebar_state="collapsed",   # ← collapsed by default
 )
 

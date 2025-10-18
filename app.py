@@ -591,24 +591,15 @@ with colA:
 
 with colB:
     st.markdown("### 💬 Tutor Chat")
-    st.caption("Ask questions here.")
+    st.caption("Ask follow-up questions. Answers cite authoritative sources and follow the model answer.")
 
-    # 1) Ensure chat history exists
+    # --- state ---
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
-
-    # 2) Render prior messages
-    for msg in st.session_state.chat_history:
-        if msg["role"] in ("user", "assistant"):
-            with st.chat_message(msg["role"]):
-                st.write(msg["content"])
-                if msg["role"] == "assistant":
-                    render_sources_used(msg.get("sources", []))  # NEW: per-message sources
-        
-    # 3) Persistent composer (replaces st.chat_input which clears after send)
     if "chat_draft" not in st.session_state:
-        st.session_state.chat_draft = ""   # persists across reruns until user clears
+        st.session_state.chat_draft = ""
 
+    # --- composer ---
     c1, c2, c3 = st.columns([6, 1, 1])
     with c1:
         st.text_area(
@@ -624,8 +615,9 @@ with colB:
     if clear:
         st.session_state.chat_draft = ""
 
+    # --- handle send: UPDATE STATE FIRST, DO NOT RENDER INLINE ---
     if send and st.session_state.chat_draft.strip():
-        user_q = st.session_state.chat_draft  # do NOT clear -> question remains visible
+        user_q = st.session_state.chat_draft
         st.session_state.chat_history.append({"role": "user", "content": user_q})
 
         with st.spinner("Retrieving sources and drafting a grounded reply..."):
@@ -633,8 +625,6 @@ with colB:
             top_pages, source_lines = [], []
             if enable_web:
                 pages = collect_corpus(student_answer, user_q, max_fetch=20)
-
-                # IMPORTANT: use the working function here to avoid the unpack error
                 top_pages, source_lines = retrieve_snippets_with_manual(
                     (student_answer or "") + "\n\n" + user_q,
                     MODEL_ANSWER, pages, backend,
@@ -653,7 +643,6 @@ with colB:
                 reply = call_groq(msgs, api_key, model_name=model_name, temperature=temp, max_tokens=600)
             else:
                 reply = None
-
             if not reply:
                 reply = (
                     "I couldn’t reach the LLM. Here are the most relevant source snippets:\n\n"
@@ -661,9 +650,28 @@ with colB:
                     + "\n\nIn doubt, follow the model answer."
                 )
 
-            with st.chat_message("assistant"):
-                st.write(reply)
-            st.session_state.chat_history.append({"role": "assistant", "content": reply})
+        # Append the assistant message WITH its per-message sources
+        st.session_state.chat_history.append({
+            "role": "assistant",
+            "content": reply or "",
+            "sources": source_lines[:]  # persistent per-message list
+        })
+
+    # --- render FULL history AFTER updates so latest sources appear immediately ---
+    for msg in st.session_state.chat_history:
+        role = msg.get("role", "")
+        if role in ("user", "assistant"):
+            with st.chat_message(role):
+                st.write(msg.get("content", ""))
+                if role == "assistant":
+                    # Per-message "Sources used"
+                    st.markdown("#### 📚 Sources used")
+                    srcs = msg.get("sources", [])
+                    if not srcs:
+                        st.write("— no web sources available —")
+                    else:
+                        for line in srcs:
+                            st.markdown(f"- {line}")
 
 st.divider()
 st.markdown(

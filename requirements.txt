@@ -1,0 +1,8 @@
+streamlit>=1.36
+PyMuPDF
+requests
+numpy
+scikit-learn
+sentence-transformers
+beautifulsoup4
+lxml

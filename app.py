@@ -440,6 +440,42 @@ def clear_chat_draft():
     # Clear the persistent composer safely during the button's on_click callback
     st.session_state["chat_draft"] = ""
 
+# --- Chat callbacks ------------------------------------------------------------
+def clear_chat_draft():
+    # Clear the persistent composer safely
+    st.session_state["chat_draft"] = ""
+    # optional: st.rerun()
+
+def reset_chat():
+    # Wipes the entire conversation (answers + questions + their sources)
+    st.session_state["chat_history"] = []
+    # optional: also clear the draft:
+    # st.session_state["chat_draft"] = ""
+    st.rerun()  # ensure immediate re-render
+
+def clear_last_exchange():
+    """
+    Removes the last assistant message and, if present, the immediately preceding user message.
+    Useful if the last answer was off-topic or leaked style.
+    """
+    hist = list(st.session_state.get("chat_history", []))
+    if not hist:
+        return
+    # Pop trailing whitespace/system noise if any (defensive)
+    while hist and hist[-1].get("role") not in ("user", "assistant"):
+        hist.pop()
+
+    # Remove last assistant message (if any)
+    if hist and hist[-1].get("role") == "assistant":
+        hist.pop()
+
+    # Remove the preceding user question (if any)
+    if hist and hist[-1].get("role") == "user":
+        hist.pop()
+
+    st.session_state["chat_history"] = hist
+    st.rerun()
+
 # ---------------- UI ----------------
 import streamlit as st
 import os
@@ -603,7 +639,7 @@ with colB:
         st.session_state.chat_draft = ""
 
     # --- composer ---
-    c1, c2, c3 = st.columns([6, 1, 1])
+    c1, c2, c3, c4, c5 = st.columns([6, 1, 1, 2, 2])
     with c1:
         st.text_area(
             "Ask a question about your feedback, the law, or how to improve…",
@@ -614,7 +650,11 @@ with colB:
         send = st.button("Send", use_container_width=True, key="send_btn")
     with c3:
         st.button("Clear", use_container_width=True, key="clear_btn", on_click=clear_chat_draft)
-    
+    with c4:
+        st.button("Reset chat", use_container_width=True, key="reset_chat_btn", on_click=reset_chat)
+    with c5:
+        st.button("Undo last Q&A", use_container_width=True, key="undo_last_btn", on_click=clear_last_exchange)
+        
     # --- handle send: UPDATE STATE FIRST, DO NOT RENDER INLINE ---
     if send and st.session_state.chat_draft.strip():
         user_q = st.session_state.chat_draft

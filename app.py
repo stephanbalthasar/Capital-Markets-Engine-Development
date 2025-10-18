@@ -578,25 +578,52 @@ with colA:
 
 with colB:
     st.markdown("### 💬 Tutor Chat")
-    st.caption("Ask follow-up questions. Answers cite authoritative sources and follow the model answer.")
+    st.caption("Ask questions here.")
+
+    # 1) Ensure chat history exists
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
+    # 2) Render prior messages
     for msg in st.session_state.chat_history:
         if msg["role"] in ("user", "assistant"):
             with st.chat_message(msg["role"]):
                 st.write(msg["content"])
 
-    user_q = st.chat_input("Ask a question about your feedback, the law, or how to improve…")
-    if user_q:
+    # 3) Persistent composer (replaces st.chat_input which clears after send)
+    if "chat_draft" not in st.session_state:
+        st.session_state.chat_draft = ""   # persists across reruns until user clears
+
+    c1, c2, c3 = st.columns([6, 1, 1])
+    with c1:
+        st.text_area(
+            "Ask a question about your feedback, the law, or how to improve…",
+            key="chat_draft",
+            height=90
+        )
+    with c2:
+        send = st.button("Send", use_container_width=True, key="send_btn")
+    with c3:
+        clear = st.button("Clear", use_container_width=True, key="clear_btn")
+
+    if clear:
+        st.session_state.chat_draft = ""
+
+    if send and st.session_state.chat_draft.strip():
+        user_q = st.session_state.chat_draft  # do NOT clear -> question remains visible
+        st.session_state.chat_history.append({"role": "user", "content": user_q})
+
         with st.spinner("Retrieving sources and drafting a grounded reply..."):
             backend = load_embedder()
             top_pages, source_lines = [], []
             if enable_web:
                 pages = collect_corpus(student_answer, user_q, max_fetch=20)
+
+                # IMPORTANT: use the working function here to avoid the unpack error
                 top_pages, source_lines = retrieve_snippets_with_manual(
                     (student_answer or "") + "\n\n" + user_q,
-                    MODEL_ANSWER, pages, backend, top_k_pages=max_sources, chunk_words=170
+                    MODEL_ANSWER, pages, backend,
+                    top_k_pages=max_sources, chunk_words=170
                 )
 
             sources_block = "\n".join(source_lines) if source_lines else "(no web sources available)"
@@ -605,8 +632,6 @@ with colB:
                 for sn in tp["snippets"]:
                     excerpts_items.append(f"[{i+1}] {sn}")
             excerpts_block = "\n\n".join(excerpts_items[: max_sources * 3]) if excerpts_items else "(no excerpts)"
-
-            st.session_state.chat_history.append({"role": "user", "content": user_q})
 
             if api_key:
                 msgs = build_chat_messages(st.session_state.chat_history, MODEL_ANSWER, sources_block, excerpts_block)
@@ -623,11 +648,10 @@ with colB:
 
             with st.chat_message("assistant"):
                 st.write(reply)
-
             st.session_state.chat_history.append({"role": "assistant", "content": reply})
 
 st.divider()
 st.markdown(
-    "ℹ️ **Notes**: The app grounds answers in authoritative sources and the hidden model answer. "
+    "ℹ️ **Notes**: This app is authored by Stephan Balthasar. It provides feedback and chat answers based on web sources and a model answer. "
     "If web sources appear to diverge, the tutor explains the divergence but follows the model answer."
 )

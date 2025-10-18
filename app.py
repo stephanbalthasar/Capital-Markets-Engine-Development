@@ -428,8 +428,8 @@ EXCERPTS (quote sparingly; use [n] to cite):
 {excerpts_block}
 
 TASK:
-Provide <220 words of numbered, actionable feedback. Correct mis-citations (e.g., Art 3(1) PR -> Art 3(3) PR; § 40 WpHG -> § 43(1) WpHG).
-Explain briefly why, with citations [n]. If sources diverge, follow the MODEL ANSWER.
+Provide actionable educational feedback. Write no more than 400 words. End with a concluding sentence. Do not start new sections. Correct mis-citations (e.g., Art 3(1) PR -> Art 3(3) PR; § 40 WpHG -> § 43(1) WpHG).
+Explain briefly why, with citations [n]. Where students cite wrong legal provisions, correct. Where students make false statements, point this out and explain how they are wrong. If central aspects are missing from the student's answer, point this out and explain why it is relevant. If sources diverge, follow the MODEL ANSWER.
 """
 
 def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_block: str, excerpts_block: str) -> List[Dict]:

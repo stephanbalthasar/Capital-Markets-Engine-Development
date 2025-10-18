@@ -427,7 +427,7 @@ def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_blo
     msgs.append({"role": "system", "content": "RELEVANT EXCERPTS (quote sparingly):\n" + excerpts_block})
     return msgs
 
-# ------------------------------ Chat Helper ----------
+# ------------------------------ Chat Helpers ----------
 def render_sources_used(source_lines: list[str]) -> None:
     with st.expander("📚 Sources used", expanded=False):
         if not source_lines:
@@ -436,6 +436,9 @@ def render_sources_used(source_lines: list[str]) -> None:
         for line in source_lines:
             st.markdown(f"- {line}")
 
+def clear_chat_draft():
+    # Clear the persistent composer safely during the button's on_click callback
+    st.session_state["chat_draft"] = ""
 
 # ---------------- UI ----------------
 import streamlit as st
@@ -610,11 +613,8 @@ with colB:
     with c2:
         send = st.button("Send", use_container_width=True, key="send_btn")
     with c3:
-        clear = st.button("Clear", use_container_width=True, key="clear_btn")
-
-    if clear:
-        st.session_state.chat_draft = ""
-
+        st.button("Clear", use_container_width=True, key="clear_btn", on_click=clear_chat_draft)
+    
     # --- handle send: UPDATE STATE FIRST, DO NOT RENDER INLINE ---
     if send and st.session_state.chat_draft.strip():
         user_q = st.session_state.chat_draft

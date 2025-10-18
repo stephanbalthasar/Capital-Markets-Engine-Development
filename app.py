@@ -151,19 +151,6 @@ def coverage_score(answer: str, issue: Dict) -> Tuple[int, List[str]]:
     score = int(round(issue["points"] * (len(hits) / max(1, len(issue["keywords"])))))
     return score, hits
 
-def detect_citation_issues(answer: str) -> Dict[str, List[str]]:
-    issues, suggestions = [], []
-    a = answer
-    # Art 3(1) PR (public offer) vs Art 3(3) PR (admission to trading)
-    if re.search(r"\bart\.?\s*3\s*\(\s*1\s*\)\s*(pr|prospectus)", a, flags=re.IGNORECASE):
-        issues.append("You cited Art 3(1) PR for admission to trading (public-offer rule).")
-        suggestions.append("For admission to a regulated market, cite Art 3(3) PR; also Art 20/21 PR on approval/publication.")
-    # § 40 WpHG vs § 43(1) WpHG (statement of intent)
-    if re.search(r"§\s*40\s*wphg", a, flags=re.IGNORECASE):
-        issues.append("You cited § 40 WpHG. The statement of intent is § 43(1) WpHG.")
-        suggestions.append("Replace § 40 WpHG with § 43(1) WpHG.")
-    return {"issues": issues, "suggestions": suggestions}
-
 def detect_substantive_flags(answer: str) -> List[str]:
     flags = []
     low = answer.lower()
@@ -195,7 +182,6 @@ def summarize_rubric(student_answer: str, model_answer: str, backend, required_i
         if missed:
             missing.append({"issue": row["issue"], "missed_keywords": missed})
 
-    citation_issues = detect_citation_issues(student_answer)
     substantive_flags = detect_substantive_flags(student_answer)
 
     return {
@@ -204,10 +190,9 @@ def summarize_rubric(student_answer: str, model_answer: str, backend, required_i
         "final_score": round(final, 1),
         "per_issue": per_issue,
         "missing": missing,
-        "citation_issues": citation_issues,
-        "substantive_flags": substantive_flags,
+        "substantive_flags": substantive_flags,   # keep this if you still want it
     }
-
+    
 # ---------------- Web Retrieval (RAG) ----------------
 ALLOWED_DOMAINS = {
     "eur-lex.europa.eu",        # EU law (MAR, PR, MiFID II, TD)
@@ -412,9 +397,6 @@ RUBRIC SCORES:
 - Issue coverage: {rubric['coverage_pct']}%
 - Overall score: {rubric['final_score']}%
 
-DETECTED MIS-CITATIONS:
-{json.dumps(rubric['citation_issues'], ensure_ascii=False)}
-
 DETECTED SUBSTANTIVE FLAGS:
 {json.dumps(rubric['substantive_flags'], ensure_ascii=False)}
 
@@ -557,15 +539,11 @@ with colA:
                     st.markdown(f"- ⛔ Missing: {', '.join(miss) if miss else '—'}")
 
             # Deterministic corrections
-            if rubric["citation_issues"]["issues"] or rubric["substantive_flags"]:
-                st.markdown("### 🛠️ Detected corrections")
-                for it in rubric["citation_issues"]["issues"]:
-                    st.markdown(f"- ❗ {it}")
-                for sg in rubric["citation_issues"]["suggestions"]:
-                    st.markdown(f"  - ✔️ **Suggestion:** {sg}")
+            if rubric["substantive_flags"]:
+                st.markdown("### ⚖️ Detected substantive flags")
                 for fl in rubric["substantive_flags"]:
                     st.markdown(f"- ⚖️ {fl}")
-
+            
             # LLM narrative feedback
             sources_block = "\n".join(source_lines) if source_lines else "(no web sources available)"
             excerpts_items = []

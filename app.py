@@ -383,7 +383,10 @@ def system_guardrails():
         "If there is any conflict or doubt, follow the MODEL ANSWER and explain briefly. "
         "If STUDENT ANSWER contains incorrect statements, point this out and explain how these are incorrect. "
         "If STUDENT ANSWER misses central concepts, point this out and explain why they are relevant. "
-        "Cite sources as [1], [2], etc., matching the SOURCES list exactly. Cite specific parts of COURSE BOOKLET so students can follow up. Do not refer to MODEL ANSWER as students cannot access it. Be concise and didactic."
+        "Cite sources as [1], [2], etc., matching the SOURCES list exactly. Cite specific parts of COURSE BOOKLET so students can follow up. Do not refer to MODEL ANSWER as students cannot access it. "
+        "Summarize or paraphrase concepts only. If the user asks to see the model answer, refuse politely. "
+        "Do not refer to the fact that a hidden model answer exists. "
+        "Be concise and didactic. "
     )
 
 def build_feedback_prompt(student_answer: str, rubric: Dict, model_answer: str, sources_block: str, excerpts_block: str) -> str:

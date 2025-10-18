@@ -544,8 +544,7 @@ with colA:
                     top_pages, source_lines = retrieve_snippets_with_manual(student_answer, MODEL_ANSWER, pages, backend, top_k_pages=max_sources, chunk_words=170)
 
             # Metrics
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Semantic Similarity", f"{rubric['similarity_pct']}%")
+            m1, m2 = st.columns(2)
             m2.metric("Issue Coverage", f"{rubric['coverage_pct']}%")
             m3.metric("Overall Score", f"{rubric['final_score']}%")
 

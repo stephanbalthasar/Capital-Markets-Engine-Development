@@ -695,7 +695,7 @@ with colB:
                 pages = collect_corpus(student_answer, user_q, max_fetch=20)
                 top_pages, source_lines = retrieve_snippets_with_manual(
                     (student_answer or "") + "\n\n" + user_q,
-                    MODEL_ANSWER, pages, backend,
+                    model_answer_filtered, pages, backend,
                     top_k_pages=max_sources, chunk_words=170
                 )
 
@@ -707,7 +707,7 @@ with colB:
             excerpts_block = "\n\n".join(excerpts_items[: max_sources * 3]) if excerpts_items else "(no excerpts)"
 
             if api_key:
-                msgs = build_chat_messages(st.session_state.chat_history, MODEL_ANSWER, sources_block, excerpts_block)
+                msgs = build_chat_messages(st.session_state.chat_history, model_answer_filtered, sources_block, excerpts_block)
                 reply = call_groq(msgs, api_key, model_name=model_name, temperature=temp, max_tokens=600)
             else:
                 reply = None

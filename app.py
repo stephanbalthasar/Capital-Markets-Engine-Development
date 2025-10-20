@@ -617,10 +617,6 @@ with colA:
                     pages = collect_corpus(student_answer, "", max_fetch=22)
                     top_pages, source_lines = retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend, top_k_pages=max_sources, chunk_words=170)
                     
-            # Metrics
-            m1 = st.columns(1)
-            m1.metric("Issue Coverage", f"{rubric['coverage_pct']}%")
-           
             # Breakdown
             with st.expander("🔬 Issue-by-issue breakdown"):
                 for row in rubric["per_issue"]:

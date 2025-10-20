@@ -515,6 +515,23 @@ st.set_page_config(
     initial_sidebar_state="collapsed",   # ← collapsed by default
 )
 
+import streamlit.components.v1 as components
+
+# Collapse sidebar via JavaScript (forcefully)
+components.html(
+    """
+    <script>
+        window.addEventListener('DOMContentLoaded', function () {
+            const sidebar = window.parent.document.querySelector('section[data-testid="stSidebar"]');
+            if (sidebar) {
+                sidebar.style.display = 'none';
+            }
+        });
+    </script>
+    """,
+    height=0,
+)
+
 # Student login
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False

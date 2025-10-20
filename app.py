@@ -125,6 +125,33 @@ REQUIRED_ISSUES = [
 ]
 DEFAULT_WEIGHTS = {"similarity": 0.4, "coverage": 0.6}
 
+QUESTION_MAP = {
+    "Question 1": [
+        "Inside information & timing (Art 7(1),(2),(4) MAR); disclosure & delay (Art 17 MAR; Lafonta)",
+        "Clarification: subscription doesn’t trigger §38/33(3) WpHG for Neon; only Unicorn"
+    ],
+    "Question 2": [
+        "Prospectus requirement on admission (PR 2017/1129: Art 3(3); exemption Art 1(5)(a) ≤20%; approval Art 20; publication Art 21; MiFID II 4(1)(44))",
+        "Prospectus content & risk factors (PR Art 6(1) materiality; reasons 6(1)(c); risk factors Art 16(1))"
+    ],
+    "Question 3": [
+        "Shareholding notifications (WpHG §§ 33, 34(2); acting in concert; §43 statement of intent; §44 sanctions)",
+        "Takeover law (WpÜG §§ 29(2), 30(2) control; §35 mandatory offer/disclosure; §59 suspension of rights)"
+    ]
+}
+
+def filter_model_answer_and_rubric(selected_question):
+    if selected_question == "Question 1":
+        model_answer_filtered = MODEL_ANSWER.split("2.")[0].strip()
+    elif selected_question == "Question 2":
+        model_answer_filtered = MODEL_ANSWER.split("2.")[1].split("3.")[0].strip()
+    elif selected_question == "Question 3":
+        model_answer_filtered = MODEL_ANSWER.split("3.")[1].strip()
+    else:
+        model_answer_filtered = MODEL_ANSWER
+    selected_issues = [issue for issue in REQUIRED_ISSUES if issue["name"] in QUESTION_MAP[selected_question]]
+    return model_answer_filtered, selected_issues
+
 # ---------------- Robust keyword & citation checks ----------------
 def normalize_ws(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
@@ -561,6 +588,13 @@ st.title("EUCapML Case Tutor")
 with st.expander("📚 Case (click to read)"):
     st.write(CASE)
 
+selected_question = st.selectbox(
+    "Which question are you answering?",
+    options=["Question 1", "Question 2", "Question 3"],
+    index=0,
+    help="This limits feedback to the selected question only."
+)
+
 st.subheader("📝 Your Answer")
 student_answer = st.text_area("Write your solution here (≥ ~120 words).", height=260)
 
@@ -575,13 +609,14 @@ with colA:
         else:
             with st.spinner("Scoring and collecting sources..."):
                 backend = load_embedder()
-                rubric = summarize_rubric(student_answer, MODEL_ANSWER, backend, REQUIRED_ISSUES, DEFAULT_WEIGHTS)
-
+                model_answer_filtered, rubric_issues = filter_model_answer_and_rubric(selected_question)
+                rubric = summarize_rubric(student_answer, model_answer_filtered, backend, rubric_issues, DEFAULT_WEIGHTS)
+                
                 top_pages, source_lines = [], []
                 if enable_web:
                     pages = collect_corpus(student_answer, "", max_fetch=22)
-                    top_pages, source_lines = retrieve_snippets_with_manual(student_answer, MODEL_ANSWER, pages, backend, top_k_pages=max_sources, chunk_words=170)
-
+                    top_pages, source_lines = retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend, top_k_pages=max_sources, chunk_words=170)
+                    
             # Metrics
             m1, m2 = st.columns(2)
             m1.metric("Issue Coverage", f"{rubric['coverage_pct']}%")
@@ -613,7 +648,7 @@ with colA:
             if api_key:
                 messages = [
                     {"role": "system", "content": system_guardrails()},
-                    {"role": "user", "content": build_feedback_prompt(student_answer, rubric, MODEL_ANSWER, sources_block, excerpts_block)},
+                    {"role": "user", "content": build_feedback_prompt(student_answer, rubric, model_answer_filtered, sources_block, excerpts_block)},
                 ]
                 reply = call_groq(messages, api_key, model_name=model_name, temperature=temp, max_tokens=480)
                 if reply:

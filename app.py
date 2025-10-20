@@ -664,7 +664,7 @@ with colA:
 
 with colB:
     st.markdown("### 💬 Tutor Chat: Ask me anything!")
-    st.caption("You can ask for help with creating an answer, follow-up questions on feedback given by this app, and discuss cases from the course booklet.")
+    st.caption("You can use this chat to ask for help with creating an answer, follow-up questions on feedback given by this app, and discuss cases from the course booklet.")
 
     # --- state ---
     if "chat_history" not in st.session_state:

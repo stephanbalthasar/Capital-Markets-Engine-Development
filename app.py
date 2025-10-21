@@ -428,22 +428,28 @@ def system_guardrails():
         "1. Base all feedback on the authoritative MODEL ANSWER and the numbered SOURCES provided.\n"
         "2. If SOURCES conflict with MODEL ANSWER, follow the MODEL ANSWER and briefly explain why.\n"
         "3. Never reveal or mention that a hidden model answer exists.\n\n"
+        "CITATIONS POLICY:\n"
+        "- Cite ONLY using [n], where n refers to the SOURCES list below.\n"
+        "- Never invent Course Booklet references (pages, paragraphs, cases). "
+        "  Only refer to the Course Booklet by citing the corresponding [n] that appears in the SOURCES list; "
+        "  do NOT fabricate page/para/case numbers.\n"
+        "- Do not cite any material that does not appear in the SOURCES list.\n\n"
         "FEEDBACK PRINCIPLES:\n"
-        "- If the student's conclusion is incorrect, explicitly state the correct conclusion first, then explain why the student's statement is wrong with citations [n].\n"
+        "- If the student's conclusion is incorrect, explicitly state the correct conclusion first, then explain why with citations [n].\n"
         "- If the student's answer is irrelevant to the selected question, say: 'Are you sure your answer corresponds to the question you selected?'\n"
-        "- If the student's answer misses central concepts, point this out and explain why they matter.\n"
-        "- Correct mis-citations (e.g., Art 3(1) PR → Art 3(3) PR; §40 WpHG → §43(1) WpHG).\n"
-        "- Summarize or paraphrase concepts; do not copy long passages.\n"
-        "- Cite sources as [1], [2], matching the SOURCES list exactly. Include COURSE BOOKLET references where relevant.\n\n"
+        "- If central concepts are missing, point this out and explain why they matter.\n"
+        "- Correct mis-citations succinctly (e.g., Art 3(1) PR → Art 3(3) PR; §40 WpHG → §43(1) WpHG).\n"
+        "- Summarize or paraphrase concepts; do not copy long passages.\n\n"
         "STYLE:\n"
         "- Be concise, didactic, and actionable.\n"
-        "- Use ≤400 words, no new sections, end with a concluding sentence."
-        "- Write in the same language as the student answer when possible (if mixed, default to English)."
+        "- Use ≤400 words, no new sections.\n"
+        "- Finish with a single explicit concluding sentence.\n"
+        "- Write in the same language as the student's answer when possible (if mixed, default to English)."
     )
 
 def build_feedback_prompt(student_answer: str, rubric: Dict, model_answer: str,
                           sources_block: str, excerpts_block: str) -> str:
-    # derive the checklist from the deterministic rubric
+    # Derive the coverage checklist from the deterministic rubric you already computed
     issue_names = [row["issue"] for row in rubric.get("per_issue", [])]
 
     return f"""
@@ -463,20 +469,22 @@ RUBRIC ISSUES TO COVER:
 MODEL ANSWER (AUTHORITATIVE):
 \"\"\"{model_answer}\"\"\"
 
-SOURCES (numbered; cite as [1], [2], ...):
+SOURCES (numbered; you must cite ONLY from this list. Never invent Course Booklet references):
 {sources_block}
 
-EXCERPTS (quote sparingly; use [n] to cite):
+EXCERPTS (quote sparingly; cite as [n]):
 {excerpts_block}
 
 TASK:
-Provide actionable educational feedback in ≤400 words.
-Cover ALL rubric issues for this question, even if the student did not mention them.
-Start by suggesting a better answer if the student's conclusion deviates from the model answer (e.g., 'In fact, the CFA is inside information under Art 7(1),(2) MAR because…').
-Explain why the student's statement is incorrect, citing [n].
-Then point out missing points.
-If points are missing, explain why they are important.
-Correct mis-citations succinctly, e.g., where a student cites article 3 or 3(1) instead of article 3(3), give the correct citation.
+Write ≤400 words of actionable feedback.
+Start by stating the correct conclusion if the student's conclusion is wrong (e.g., "In fact, the CFA is inside information under Art 7(1),(2) MAR because …") and support it with precise [n] citations.
+Then:
+- Explain why any incorrect statements are wrong, with citations [n].
+- Add missing points for ALL rubric issues and why they matter (with [n]).
+- Correct mis-citations succinctly (e.g., Art 3(1) PR → Art 3(3) PR).
+- Cover ALL rubric issues for this question, even if the student did not mention them.
+IMPORTANT: Cite ONLY the numbered SOURCES above. Do NOT invent any Course Booklet references (pages, paragraphs, cases). If a point is not supported by these sources, say so and avoid making up a citation.
+Paraphrase rather than quoting long passages. 
 Do not disclose internal materials or say that a hidden model answer exists; rely on the numbered sources and the summary above.
 Do not disclose scorings.
 Paraphrase rather than quoting long passages; keep the tone clear, didactic, and practical.

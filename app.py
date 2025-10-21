@@ -382,7 +382,7 @@ def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages:
     # ---- Prepare manual meta tuples with a unique key per *page* so we can group snippets by page
     manual_meta = []
     for m in manual_metas:
-        page_key = -(m["page"])  # negative keys for manual pages
+        page_key = -(m["page_num"])  
         citation = format_manual_citation(m)  # pre-format a nice line
         # We store citation in 'title' so we can reuse downstream without new structures
         manual_meta.append((page_key, "manual://course-booklet", citation))

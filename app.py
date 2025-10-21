@@ -489,6 +489,35 @@ def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_blo
     return msgs
 
 # ------------------------------ Chat Helpers ----------
+# ---- Output completeness helpers ----
+def is_incomplete_text(text: str) -> bool:
+    """Heuristic: returns True if the text likely ends mid-sentence."""
+    if not text or not text.strip():
+        return True
+    tail = text.strip()[-1]
+    return tail not in ".!?…’”\")»]"
+
+def truncate_block(s: str, max_chars: int = 3600) -> str:
+    """Trim very long prompt sections to reduce truncation risk."""
+    s = s or ""
+    return s if len(s) <= max_chars else (s[:max_chars] + " …")
+
+def generate_with_continuation(messages, api_key, model_name, temperature=0.2, first_tokens=800, continue_tokens=280):
+    """
+    Calls the LLM, and if output ends mid-sentence, asks it to continue once.
+    """
+    reply = call_groq(messages, api_key, model_name=model_name, temperature=temperature, max_tokens=first_tokens)
+    if reply and is_incomplete_text(reply):
+        # Ask for a short continuation to finish the sentence + a 1‑sentence conclusion
+        cont_msgs = messages + [{
+            "role": "user",
+            "content": "Continue exactly where you left off. Finish the previous sentence and add a single-sentence conclusion. Do not repeat earlier text."
+        }]
+        more = call_groq(cont_msgs, api_key, model_name=model_name, temperature=min(temperature, 0.3), max_tokens=continue_tokens)
+        if more:
+            reply = (reply.rstrip() + "\n" + more.strip())
+    return reply
+
 def render_sources_used(source_lines: list[str]) -> None:
     with st.expander("📚 Sources used", expanded=False):
         if not source_lines:
@@ -797,7 +826,10 @@ with colA:
                     {"role": "system", "content": system_guardrails()},
                     {"role": "user", "content": build_feedback_prompt(student_answer, rubric, model_answer_filtered, sources_block, excerpts_block)},
                 ]
-                reply = call_groq(messages, api_key, model_name=model_name, temperature=temp, max_tokens=480)
+                # Trim large blocks to avoid overlong prompts
+                sources_block = truncate_block(sources_block, 1200)
+                excerpts_block = truncate_block(excerpts_block, 3200)  # reduce prompt size
+                reply = generate_with_continuation(messages, api_key, model_name=model_name, temperature=temp, first_tokens=900, continue_tokens=280)
                 if reply:
                     st.write(reply)
                 else:
@@ -860,8 +892,8 @@ with colB:
 
             if api_key:
                 msgs = build_chat_messages(st.session_state.chat_history, model_answer_filtered, sources_block, excerpts_block)
-                reply = call_groq(msgs, api_key, model_name=model_name, temperature=temp, max_tokens=600)
-            else:
+                reply = generate_with_continuation(msgs, api_key, model_name=model_name, temperature=temp, first_tokens=850, continue_tokens=240)
+           else:
                 reply = None
             if not reply:
                 reply = (

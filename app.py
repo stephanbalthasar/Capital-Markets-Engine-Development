@@ -406,7 +406,7 @@ def call_groq(messages: List[Dict], api_key: str, model_name: str = "llama-3.1-8
         "max_tokens": max_tokens,
     }
     try:
-        r = requests.post(url, headers=headers, json=data, timeout=60)
+        r = requests.post(url, headers=headers, json=data, timeout=90)
         if r.status_code != 200:
             # Show exact error so it's easy to fix
             try: body = r.json()
@@ -502,7 +502,7 @@ def truncate_block(s: str, max_chars: int = 3600) -> str:
     s = s or ""
     return s if len(s) <= max_chars else (s[:max_chars] + " …")
 
-def generate_with_continuation(messages, api_key, model_name, temperature=0.2, first_tokens=800, continue_tokens=280):
+def generate_with_continuation(messages, api_key, model_name, temperature=0.2, first_tokens=1200, continue_tokens=350):
     """
     Calls the LLM, and if output ends mid-sentence, asks it to continue once.
     """
@@ -829,7 +829,7 @@ with colA:
                 # Trim large blocks to avoid overlong prompts
                 sources_block = truncate_block(sources_block, 1200)
                 excerpts_block = truncate_block(excerpts_block, 3200)  # reduce prompt size
-                reply = generate_with_continuation(messages, api_key, model_name=model_name, temperature=temp, first_tokens=900, continue_tokens=280)
+                reply = generate_with_continuation(messages, api_key, model_name=model_name, temperature=temp, first_tokens=1200, continue_tokens=350)
                 if reply:
                     st.write(reply)
                 else:
@@ -892,7 +892,7 @@ with colB:
 
             if api_key:
                 msgs = build_chat_messages(st.session_state.chat_history, model_answer_filtered, sources_block, excerpts_block)
-                reply = generate_with_continuation(msgs, api_key, model_name=model_name, temperature=temp, first_tokens=850, continue_tokens=240)
+                reply = generate_with_continuation(msgs, api_key, model_name=model_name, temperature=temp, first_tokens=1200, continue_tokens=350)
             else:
                 reply = None
             if not reply:

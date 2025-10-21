@@ -328,34 +328,43 @@ def collect_corpus(student_answer: str, extra_user_q: str, max_fetch: int = 20) 
 def retrieve_snippets(student_answer: str, model_answer: str, pages: List[Dict], backend, top_k_pages: int = 8, chunk_words: int = 170):
     import fitz  # PyMuPDF
 
-def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages: List[Dict], backend, top_k_pages: int = 8, chunk_words: int = 170):
-    # Load course manual
+def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages: List[Dict], backend,
+                                  top_k_pages: int = 8, chunk_words: int = 170):
+    # ---- Load & chunk Course Booklet with page/para/case metadata
+    manual_chunks, manual_metas = [], []
     try:
-        doc = fitz.open("assets/EUCapML - Course Booklet.pdf")
-        manual_text = " ".join([page.get_text() for page in doc])
-        doc.close()
+        manual_chunks, manual_metas = extract_manual_chunks_with_refs("assets/EUCapML - Course Booklet.pdf",
+                                                                      chunk_words_hint=chunk_words)
     except Exception as e:
-        manual_text = ""
         st.warning(f"Could not load course manual: {e}")
 
-    manual_chunks = split_into_chunks(manual_text, max_words=chunk_words)
-    manual_meta = [(-1, "Course Manual", "EUCapML - Course Booklet.pdf")] * len(manual_chunks)
+    # Build manual meta tuples with a unique key per *page* so we can group snippets by page
+    manual_meta = []
+    for m in manual_metas:
+        page_key = -(m["page"])              # negative keys for manual pages
+        citation = format_manual_citation(m) # pre-format a nice line
+        # We store citation in 'title' so we can reuse downstream without new structures
+        manual_meta.append((page_key, "manual://course-booklet", citation))
 
-    # Prepare web chunks
+    # ---- Prepare web chunks (unchanged)
     web_chunks, web_meta = [], []
     for i, p in enumerate(pages):
         for ch in split_into_chunks(p["text"], max_words=chunk_words):
             web_chunks.append(ch)
-            web_meta.append((i, p["url"], p["title"]))
+            web_meta.append((i + 1, p["url"], p["title"]))
 
+    # ---- Build corpus
     all_chunks = manual_chunks + web_chunks
-    all_meta = manual_meta + web_meta
+    all_meta   = manual_meta   + web_meta
+
+    # Query vector built from student + model slice (as you have now)
     query = (student_answer or "") + "\n\n" + (model_answer or "")
     embs = embed_texts([query] + all_chunks, backend)
     qv, cvs = embs[0], embs[1:]
     sims = [cos_sim(qv, v) for v in cvs]
     idx = np.argsort(sims)[::-1]
 
+    # ---- Select top snippets grouped by (manual page) or (web page index)
     per_page = {}
     for j in idx[:400]:
         pi, url, title = all_meta[j]
@@ -366,8 +375,17 @@ def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages:
         if len(per_page) >= top_k_pages:
             break
 
+    # Order by key and build source lines. For manual items we already have 'title' as a full citation line.
     top_pages = [per_page[k] for k in sorted(per_page.keys())][:top_k_pages]
-    source_lines = [f"[{i+1}] {tp['title']} — {tp['url']}" for i, tp in enumerate(top_pages)]
+
+    source_lines = []
+    for i, tp in enumerate(top_pages):
+        if tp["url"].startswith("manual://"):
+            # already a fully formatted citation like: "Course Booklet — p. 2, Case 14, para. 115"
+            source_lines.append(f"[{i+1}] {tp['title']}")
+        else:
+            source_lines.append(f"[{i+1}] {tp['title']} — {tp['url']}")
+
     return top_pages, source_lines
 
 # ---------------- LLM via Groq (free) ----------------
@@ -480,6 +498,124 @@ def render_sources_used(source_lines: list[str]) -> None:
 def clear_chat_draft():
     # Clear the persistent composer safely during the button's on_click callback
     st.session_state["chat_draft"] = ""
+
+# ---- Course Booklet parsing helpers ----
+def split_into_paragraphs(text: str) -> list[str]:
+    """Split page text into paragraphs using blank lines; fall back to line groups."""
+    paras = [t.strip() for t in re.split(r"\n\s*\n", text) if t.strip()]
+    if paras:
+        return paras
+    # Fallback: group every ~8 lines into a paragraph
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    out, cur = [], []
+    for i, ln in enumerate(lines):
+        cur.append(ln)
+        if (i + 1) % 8 == 0:
+            out.append(" ".join(cur)); cur = []
+    if cur: out.append(" ".join(cur))
+    return out
+
+
+_para_patterns = [
+    re.compile(r"\bpara(?:graph)?\.?\s*(\d{1,4})\b", re.I),
+    re.compile(r"\bRn\.?\s*(\d{1,4})\b", re.I),              # German "Rn." = Randnummer
+    re.compile(r"\[(\d{1,4})\]"),                             # [115]
+]
+_case_pattern = re.compile(r"\b(?:Case|Fall)\s*(\d{1,4})\b", re.I)
+
+
+def detect_para_numbers(text: str) -> list[int]:
+    nums = []
+    for pat in _para_patterns:
+        nums += pat.findall(text)
+    # unique preserve order, cast to int
+    return [int(x) for i, x in enumerate(nums) if x not in nums[:i]]
+
+
+def detect_case_numbers(text: str) -> list[int]:
+    nums = _case_pattern.findall(text)
+    return [int(x) for i, x in enumerate(nums) if x not in nums[:i]]
+
+
+def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) -> tuple[list[str], list[dict]]:
+    """
+    Return (chunks, metas). Each meta has: page (1-based), paras [ints], cases [ints], file name.
+    We split by paragraphs to keep para/case references intact.
+    """
+    chunks, metas = [], []
+    try:
+        doc = fitz.open(pdf_path)
+    except Exception as e:
+        return [], []  # upstream will warn
+
+    for pno in range(len(doc)):
+        page = doc.load_page(pno)
+        page_text = page.get_text("text")
+        paras = split_into_paragraphs(page_text)
+
+        # Optional: split long paragraphs into ~chunk_words_hint pieces while keeping page/paras/cases metadata
+        for para in paras:
+            # If very long, break on sentences to ~chunk_words_hint
+            words = para.split()
+            if len(words) > chunk_words_hint * 2:
+                # naive sentence-ish split
+                parts = re.split(r"(?<=[\.\?!])\s+", para)
+                cur, cur_words = [], 0
+                for s in parts:
+                    cur.append(s)
+                    cur_words += len(s.split())
+                    if cur_words >= chunk_words_hint:
+                        para_part = " ".join(cur).strip()
+                        chunks.append(para_part)
+                        metas.append({
+                            "page": pno + 1,
+                            "paras": detect_para_numbers(para_part) or detect_para_numbers(para),
+                            "cases": detect_case_numbers(para_part) or detect_case_numbers(para),
+                            "file": "EUCapML – Course Booklet.pdf",
+                        })
+                        cur, cur_words = [], 0
+                if cur:
+                    para_part = " ".join(cur).strip()
+                    chunks.append(para_part)
+                    metas.append({
+                        "page": pno + 1,
+                        "paras": detect_para_numbers(para_part) or detect_para_numbers(para),
+                        "cases": detect_case_numbers(para_part) or detect_case_numbers(para),
+                        "file": "EUCapML – Course Booklet.pdf",
+                    })
+            else:
+                chunks.append(para)
+                metas.append({
+                    "page": pno + 1,
+                    "paras": detect_para_numbers(para),
+                    "cases": detect_case_numbers(para),
+                    "file": "EUCapML – Course Booklet.pdf",
+                })
+    doc.close()
+    return chunks, metas
+
+def format_manual_citation(meta: dict) -> str:
+    """
+    Build a human-friendly citation like:
+    'Course Booklet — p. 2, Case 14, para. 115' (or multiple paras 'paras 115–116')
+    """
+    page = meta.get("page")
+    paras = meta.get("paras") or []
+    cases = meta.get("cases") or []
+    parts = [f"Course Booklet — p. {page}"]
+    if cases:
+        if len(cases) == 1:
+            parts.append(f"Case {cases[0]}")
+        else:
+            parts.append("Cases " + ", ".join(map(str, cases)))
+    if paras:
+        if len(paras) == 1:
+            parts.append(f"para. {paras[0]}")
+        elif len(paras) == 2 and paras[1] == paras[0] + 1:
+            parts.append(f"paras {paras[0]}–{paras[1]}")
+        else:
+            parts.append("paras " + ", ".join(map(str, paras[:3])) + ("…" if len(paras) > 3 else ""))
+    return ", ".join(parts)
 
 # --- Chat callbacks ------------------------------------------------------------
 def clear_chat_draft():

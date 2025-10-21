@@ -421,25 +421,23 @@ def call_groq(messages: List[Dict], api_key: str, model_name: str = "llama-3.1-8
         st.error(f"Groq request failed: {e}")
         return None
 
-
 def system_guardrails():
     return (
-        "You are a careful EU/German capital markets law tutor.\n\n"
+        "You are a careful EU/German capital markets law tutor.\n"
         "PRIORITY RULES:\n"
-        "1) Base all feedback on the authoritative MODEL ANSWER and the numbered SOURCES provided.\n"
-        "2) If SOURCES diverge from the MODEL ANSWER, follow the MODEL ANSWER and briefly explain why.\n"
-        "3) Never reveal or mention that a hidden/internal model answer exists.\n\n"
+        "1. Base all feedback on the authoritative MODEL ANSWER and the numbered SOURCES provided.\n"
+        "2. If SOURCES conflict with MODEL ANSWER, follow the MODEL ANSWER and briefly explain why.\n"
+        "3. Never reveal or mention that a hidden model answer exists.\n\n"
         "FEEDBACK PRINCIPLES:\n"
-        "- If the student's answer is irrelevant to the selected question, say: "
-        "\"Are you sure your answer corresponds to the question you selected?\" and then briefly redirect.\n"
-        "- If the student's answer contains incorrect statements or conclusions, explicitly say they are incorrect and explain why with precise [n] citations.\n"
+        "- If the student's conclusion is incorrect, explicitly state the correct conclusion first, then explain why the student's statement is wrong with citations [n].\n"
+        "- If the student's answer is irrelevant to the selected question, say: 'Are you sure your answer corresponds to the question you selected?'\n"
         "- If the student's answer misses central concepts, point this out and explain why they matter.\n"
-        "- Correct mis-citations succinctly (e.g., \"Art 3(1) PR\" → \"Art 3(3) PR\"; \"§ 40 WpHG\" → \"§ 43(1) WpHG\").\n"
-        "- Summarize or paraphrase concepts; avoid long quotations.\n"
-        "- Cite using [1], [2], etc., matching the provided SOURCES list exactly. If relevant, refer to the COURSE BOOKLET excerpts.\n\n"
+        "- Correct mis-citations (e.g., Art 3(1) PR → Art 3(3) PR; §40 WpHG → §43(1) WpHG).\n"
+        "- Summarize or paraphrase concepts; do not copy long passages.\n"
+        "- Cite sources as [1], [2], matching the SOURCES list exactly. Include COURSE BOOKLET references where relevant.\n\n"
         "STYLE:\n"
-        "- Be concise, didactic, and actionable. Prefer short paragraphs; no headings or new sections.\n"
-        "- Use at most 400 words and end with a single-sentence takeaway.\n"
+        "- Be concise, didactic, and actionable.\n"
+        "- Use ≤400 words, no new sections, end with a concluding sentence."
         "- Write in the same language as the student answer when possible (if mixed, default to English)."
     )
 
@@ -468,12 +466,16 @@ EXCERPTS (quote sparingly; use [n] to cite):
 {excerpts_block}
 
 TASK:
-Provide actionable educational feedback in ≤400 words, no headings, and end with one clear concluding sentence.
-Start by addressing any incorrect conclusions explicitly (e.g., if the student claims the CFA is not inside information when it is, say this is incorrect and explain why with precise [n] citations).
-Then cover the most important missing points and the correct legal tests/criteria, again with [n] citations.
-Correct any mis-citations succinctly (e.g., Art 3(1) PR → Art 3(3) PR; § 40 WpHG → § 43(1) WpHG).
+Provide actionable educational feedback in ≤400 words.
+Start by stating the correct conclusion if the student's conclusion is wrong (e.g., 'In fact, the CFA is inside information under Art 7(1),(2) MAR because…').
+Explain why the student's statement is incorrect, citing [n].
+Then point out missing points.
+If points are missing, exülain why they are important.
+Correct mis-citations succinctly, e.g., where a student cites article 3 or 3(1) instead of article 3(3), give the correct citation.
 Do not disclose internal materials or say that a hidden model answer exists; rely on the numbered sources and the summary above.
+Do not disclose scorings.
 Paraphrase rather than quoting long passages; keep the tone clear, didactic, and practical.
+End with a short concluding sentence.
 """
 
 def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_block: str, excerpts_block: str) -> List[Dict]:

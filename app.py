@@ -893,7 +893,7 @@ with colB:
             if api_key:
                 msgs = build_chat_messages(st.session_state.chat_history, model_answer_filtered, sources_block, excerpts_block)
                 reply = generate_with_continuation(msgs, api_key, model_name=model_name, temperature=temp, first_tokens=850, continue_tokens=240)
-           else:
+            else:
                 reply = None
             if not reply:
                 reply = (

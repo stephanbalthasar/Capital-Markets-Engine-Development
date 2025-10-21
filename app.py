@@ -896,7 +896,7 @@ with colB:
             
             sources_block = "\n".join(source_lines) if source_lines else "(no web sources available)"
             excerpts_items = []
-                for i, tp in enumerate(top_pages):
+               for i, tp in enumerate(top_pages):
                     for sn in tp["snippets"]:
                         excerpts_items.append(f"[{i+1}] {sn}")
             excerpts_block = "\n\n".join(excerpts_items[: max_sources * 3]) if excerpts_items else "(no excerpts)"

@@ -927,6 +927,6 @@ with colB:
 
 st.divider()
 st.markdown(
-    "ℹ️ **Notes**: This app is authored by Stephan Balthasar. It provides feedback and chat answers based on web sources and a model answer. "
-    "If web sources appear to diverge, the tutor explains the divergence but follows the model answer."
+    "ℹ️ **Notes**: This app is authored by Stephan Balthasar. It provides feedback and chat answers based on artificial intelligence and large language models." 
+    "Students are advised to use caution when using the feedback enginge and chat functions."
 )

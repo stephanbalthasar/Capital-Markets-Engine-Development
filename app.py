@@ -403,46 +403,59 @@ def call_groq(messages: List[Dict], api_key: str, model_name: str = "llama-3.1-8
         st.error(f"Groq request failed: {e}")
         return None
 
+
 def system_guardrails():
     return (
-        "You are a careful EU/German capital markets law tutor. "
-        "Always ground your answers in the MODEL ANSWER (authoritative) AND the provided web SOURCES. "
-        "If there is any conflict or doubt, follow the MODEL ANSWER and explain briefly. "
-        "If the STUDENT ANSWER has nothing to do with the part of the MODEL ANSWER corresponding to the question chose, say something like: Are you sure your answer corresponds to the question you selected? "
-        "If STUDENT ANSWER contains incorrect statements, point this out and explain how these are incorrect. "
-        "If STUDENT ANSWER misses central concepts, point this out and explain why they are relevant. "
-        "Cite sources as [1], [2], etc., matching the SOURCES list exactly. Cite specific parts of COURSE BOOKLET so students can follow up. Do not refer to MODEL ANSWER as students cannot access it. "
-        "Summarize or paraphrase concepts only. If the user asks to see the model answer, refuse politely. "
-        "Do not refer to the fact that a hidden model answer exists. "
-        "Be concise and didactic. "
+        "You are a careful EU/German capital markets law tutor.\n\n"
+        "PRIORITY RULES:\n"
+        "1) Base all feedback on the authoritative MODEL ANSWER and the numbered SOURCES provided.\n"
+        "2) If SOURCES diverge from the MODEL ANSWER, follow the MODEL ANSWER and briefly explain why.\n"
+        "3) Never reveal or mention that a hidden/internal model answer exists.\n\n"
+        "FEEDBACK PRINCIPLES:\n"
+        "- If the student's answer is irrelevant to the selected question, say: "
+        "\"Are you sure your answer corresponds to the question you selected?\" and then briefly redirect.\n"
+        "- If the student's answer contains incorrect statements or conclusions, explicitly say they are incorrect and explain why with precise [n] citations.\n"
+        "- If the student's answer misses central concepts, point this out and explain why they matter.\n"
+        "- Correct mis-citations succinctly (e.g., \"Art 3(1) PR\" → \"Art 3(3) PR\"; \"§ 40 WpHG\" → \"§ 43(1) WpHG\").\n"
+        "- Summarize or paraphrase concepts; avoid long quotations.\n"
+        "- Cite using [1], [2], etc., matching the provided SOURCES list exactly. If relevant, refer to the COURSE BOOKLET excerpts.\n\n"
+        "STYLE:\n"
+        "- Be concise, didactic, and actionable. Prefer short paragraphs; no headings or new sections.\n"
+        "- Use at most 400 words and end with a single-sentence takeaway.\n"
+        "- Write in the same language as the student answer when possible (if mixed, default to English)."
     )
 
-def build_feedback_prompt(student_answer: str, rubric: Dict, model_answer: str, sources_block: str, excerpts_block: str) -> str:
-    return f"""GRADE THE STUDENT'S ANSWER USING THE RUBRIC, DETECTED ISSUES, AND WEB SOURCES.
+def build_feedback_prompt(student_answer: str, rubric: Dict, model_answer: str,
+                          sources_block: str, excerpts_block: str) -> str:
+    return f"""
+GRADE THE STUDENT'S ANSWER USING THE RUBRIC AND THE WEB/BOOKLET SOURCES.
 
 STUDENT ANSWER:
 \"\"\"{student_answer}\"\"\"
 
-RUBRIC SCORES:
-- Similarity to model answer: {rubric['similarity_pct']}%
-- Issue coverage: {rubric['coverage_pct']}%
-- Overall score: {rubric['final_score']}%
-
+RUBRIC SUMMARY:
+- Similarity to model answer: {rubric.get('similarity_pct', 0)}%
+- Issue coverage: {rubric.get('coverage_pct', 0)}%
+- Overall score: {rubric.get('final_score', 0)}%
 DETECTED SUBSTANTIVE FLAGS:
-{json.dumps(rubric['substantive_flags'], ensure_ascii=False)}
+{json.dumps(rubric.get('substantive_flags', []), ensure_ascii=False)}
 
 MODEL ANSWER (AUTHORITATIVE):
 \"\"\"{model_answer}\"\"\"
 
-SOURCES (numbered):
+SOURCES (numbered; cite as [1], [2], ...):
 {sources_block}
 
 EXCERPTS (quote sparingly; use [n] to cite):
 {excerpts_block}
 
 TASK:
-Provide actionable educational feedback. Write no more than 400 words. End with a concluding sentence. Do not start new sections. Correct mis-citations (e.g., Art 3(1) PR -> Art 3(3) PR; § 40 WpHG -> § 43(1) WpHG).
-Explain briefly why, with citations [n]. Where students cite wrong legal provisions, correct. Where students make false statements, point this out and explain how they are wrong. If central aspects are missing from the student's answer, point this out and explain why it is relevant. If sources diverge, follow the MODEL ANSWER.
+Provide actionable educational feedback in ≤400 words, no headings, and end with one clear concluding sentence.
+Start by addressing any incorrect conclusions explicitly (e.g., if the student claims the CFA is not inside information when it is, say this is incorrect and explain why with precise [n] citations).
+Then cover the most important missing points and the correct legal tests/criteria, again with [n] citations.
+Correct any mis-citations succinctly (e.g., Art 3(1) PR → Art 3(3) PR; § 40 WpHG → § 43(1) WpHG).
+Do not disclose internal materials or say that a hidden model answer exists; rely on the numbered sources and the summary above.
+Paraphrase rather than quoting long passages; keep the tone clear, didactic, and practical.
 """
 
 def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_block: str, excerpts_block: str) -> List[Dict]:

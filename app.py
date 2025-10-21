@@ -329,9 +329,6 @@ def collect_corpus(student_answer: str, extra_user_q: str, max_fetch: int = 20) 
             fetched.append(pg)
     return fetched
 
-def retrieve_snippets(student_answer: str, model_answer: str, pages: List[Dict], backend, top_k_pages: int = 8, chunk_words: int = 170):
-    import fitz  # PyMuPDF
-
 def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages: List[Dict], backend,
                                   top_k_pages: int = 8, chunk_words: int = 170):
     # ---- Load & chunk Course Booklet with page/para/case metadata
@@ -549,8 +546,9 @@ def clear_chat_draft():
     st.session_state["chat_draft"] = ""
 
 # ---- Course Booklet parsing helpers ----
+# ---- Course Booklet parsing helpers (fixed) ----
 def split_into_paragraphs(text: str) -> list[str]:
-    """Split page text into paragraphs using blank lines; fall back to line groups."""
+    """Split page text into paragraphs using blank lines; fall back to grouping lines."""
     paras = [t.strip() for t in re.split(r"\n\s*\n", text) if t.strip()]
     if paras:
         return paras
@@ -561,54 +559,62 @@ def split_into_paragraphs(text: str) -> list[str]:
         cur.append(ln)
         if (i + 1) % 8 == 0:
             out.append(" ".join(cur)); cur = []
-    if cur: out.append(" ".join(cur))
+    if cur:
+        out.append(" ".join(cur))
     return out
 
-
+# Paragraph markers: para. 115 / Rn. 115 / [115] / (115)
 _para_patterns = [
     re.compile(r"\bpara(?:graph)?\.?\s*(\d{1,4})\b", re.I),
-    re.compile(r"\bRn\.?\s*(\d{1,4})\b", re.I),              # German "Rn." = Randnummer
-    re.compile(r"\[(\d{1,4})\]"),                             # [115]
+    re.compile(r"\bRn\.?\s*(\d{1,4})\b", re.I),          # German "Rn." = Randnummer
+    re.compile(r"\[(\d{1,4})\]"),                         # [115]
+    re.compile(r"\((\d{1,4})\)"),                         # (115)
 ]
+# Case markers: "Case 14" or "Fall 14"
 _case_pattern = re.compile(r"\b(?:Case|Fall)\s*(\d{1,4})\b", re.I)
-
 
 def detect_para_numbers(text: str) -> list[int]:
     nums = []
     for pat in _para_patterns:
         nums += pat.findall(text)
     # unique preserve order, cast to int
-    return [int(x) for i, x in enumerate(nums) if x not in nums[:i]]
-
+    out = []
+    for x in nums:
+        if x not in out:
+            out.append(x)
+    return [int(x) for x in out]
 
 def detect_case_numbers(text: str) -> list[int]:
     nums = _case_pattern.findall(text)
-    return [int(x) for i, x in enumerate(nums) if x not in nums[:i]]
-
+    out = []
+    for x in nums:
+        if x not in out:
+            out.append(x)
+    return [int(x) for x in out]
 
 def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) -> tuple[list[str], list[dict]]:
     """
-    Return (chunks, metas). Each meta has: page (1-based), paras [ints], cases [ints], file name.
-    We split by paragraphs to keep para/case references intact.
+    Returns (chunks, metas) with accurate page *labels* (printed page numbers),
+    not just 1-based PDF indices. We split by paragraphs and break very long ones by sentences.
+    meta: {pdf_index, page_label, page_num, paras [ints], cases [ints], file}
     """
     chunks, metas = [], []
     try:
         doc = fitz.open(pdf_path)
-    except Exception as e:
-        return [], []  # upstream will warn
+    except Exception:
+        return [], []
 
     for pno in range(len(doc)):
         page = doc.load_page(pno)
         page_text = page.get_text("text")
+        page_label = page.get_label() or str(pno + 1)  # printed page label (can be roman numerals)
         paras = split_into_paragraphs(page_text)
 
-        # Optional: split long paragraphs into ~chunk_words_hint pieces while keeping page/paras/cases metadata
         for para in paras:
-            # If very long, break on sentences to ~chunk_words_hint
+            # Break very long paragraphs roughly to the hint size
             words = para.split()
             if len(words) > chunk_words_hint * 2:
-                # naive sentence-ish split
-                parts = re.split(r"(?<=[\.\?!])\s+", para)
+                parts = re.split(r"(?<=[\.\?\!])\s+", para)  # <-- fixed sentence splitter
                 cur, cur_words = [], 0
                 for s in parts:
                     cur.append(s)
@@ -617,28 +623,34 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
                         para_part = " ".join(cur).strip()
                         chunks.append(para_part)
                         metas.append({
-                            "page": pno + 1,
+                            "pdf_index": pno,
+                            "page_label": page_label,
+                            "page_num": pno + 1,  # numeric fallback for anchors
                             "paras": detect_para_numbers(para_part) or detect_para_numbers(para),
                             "cases": detect_case_numbers(para_part) or detect_case_numbers(para),
-                            "file": "EUCapML – Course Booklet.pdf",
+                            "file": "EUCapML - Course Booklet.pdf",  # <-- unify name with actual path
                         })
                         cur, cur_words = [], 0
                 if cur:
                     para_part = " ".join(cur).strip()
                     chunks.append(para_part)
                     metas.append({
-                        "page": pno + 1,
+                        "pdf_index": pno,
+                        "page_label": page_label,
+                        "page_num": pno + 1,
                         "paras": detect_para_numbers(para_part) or detect_para_numbers(para),
                         "cases": detect_case_numbers(para_part) or detect_case_numbers(para),
-                        "file": "EUCapML – Course Booklet.pdf",
+                        "file": "EUCapML - Course Booklet.pdf",
                     })
             else:
                 chunks.append(para)
                 metas.append({
-                    "page": pno + 1,
+                    "pdf_index": pno,
+                    "page_label": page_label,
+                    "page_num": pno + 1,
                     "paras": detect_para_numbers(para),
                     "cases": detect_case_numbers(para),
-                    "file": "EUCapML – Course Booklet.pdf",
+                    "file": "EUCapML - Course Booklet.pdf",
                 })
     doc.close()
     return chunks, metas
@@ -646,17 +658,15 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
 def format_manual_citation(meta: dict) -> str:
     """
     Build a human-friendly citation like:
-    'Course Booklet — p. 2, Case 14, para. 115' (or multiple paras 'paras 115–116')
+    'Course Booklet — p. ii (PDF p. 4), Case 14, para. 115'
     """
-    page = meta.get("page")
+    lbl = meta.get("page_label")
+    pdfp = meta.get("page_num")
     paras = meta.get("paras") or []
     cases = meta.get("cases") or []
-    parts = [f"Course Booklet — p. {page}"]
+    parts = [f"Course Booklet — p. {lbl} (PDF p. {pdfp})"]
     if cases:
-        if len(cases) == 1:
-            parts.append(f"Case {cases[0]}")
-        else:
-            parts.append("Cases " + ", ".join(map(str, cases)))
+        parts.append("Case " + (", ".join(map(str, cases)) if len(cases) > 1 else str(cases[0])))
     if paras:
         if len(paras) == 1:
             parts.append(f"para. {paras[0]}")
@@ -779,7 +789,22 @@ with st.sidebar:
             st.code((r.text or "")[:1000], language="json")
         except Exception as e:
             st.exception(e)
-
+    # ---- Course Booklet diagnostics ----
+    st.subheader("Course Booklet diagnostics")
+    if st.checkbox("Preview parsed booklet (first 6 pages)"):
+        try:
+            chunks, metas = extract_manual_chunks_with_refs("assets/EUCapML - Course Booklet.pdf", chunk_words_hint=160)
+            by_page = {}
+            for ch, m in zip(chunks, metas):
+                by_page.setdefault(m["page_label"], []).append((ch[:140] + ("…" if len(ch) > 140 else ""), m))
+            for i, (lbl, arr) in enumerate(list(by_page.items())[:6], start=1):
+                st.markdown(f"**Page label {lbl}** (PDF p. {arr[0][1]['page']})")
+                for snip, meta in arr[:2]:  # show 2 snippets per page
+                    st.write("•", snip)
+                    st.caption(f"Cases: {meta['cases'] or '—'} | Paras: {meta['paras'] or '—'}")
+        except Exception as e:
+            st.warning(f"Preview failed: {e}")
+            
 # Main UI
 st.image("assets/logo.png", width=240)
 st.title("EUCapML Case Tutor")

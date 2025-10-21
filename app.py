@@ -140,6 +140,24 @@ QUESTION_MAP = {
     ]
 }
 
+GOLD_POINTS = {
+    "Question 1": [
+        "Inside information under Art 7(1),(2) MAR: precise nature incl. intermediate step/protracted process; Lafonta specificity.",
+        "Disclosure timing Art 17(1) MAR 'as soon as possible'; delay under Art 17(4) MAR only if (a) legitimate interest, (b) not misleading, (c) confidentiality maintained."
+    ],
+    "Question 2": [
+        "Admission to trading triggers prospectus: Art 3(3) PR; ≤20% exemption Art 1(5)(a) PR not applicable at 30%; approval Art 20 PR; publication Art 21 PR; MiFID II 4(1)(44) definition.",
+        "Prospectus content: Art 6(1) PR material information; reasons Art 6(1)(c); risk factors Art 16(1)."
+    ],
+    "Question 3": [
+        "Shareholding notifications: §§33 WpHG thresholds; §34(2) WpHG acting in concert incl. strategy alignment; §43(1) WpHG statement of intent; §44 WpHG sanctions.",
+        "Takeover control: §29(2) WpÜG 30% control; §30(2) aggregation with acting in concert; §35 WpÜG mandatory offer/disclosure; §59 WpÜG suspension."
+    ]
+}
+
+
+
+
 def filter_model_answer_and_rubric(selected_question):
     if selected_question == "Question 1":
         model_answer_filtered = MODEL_ANSWER.split("2.")[0].strip()
@@ -406,9 +424,12 @@ def call_groq(messages: List[Dict], api_key: str, model_name: str = "llama-3.1-8
 def system_guardrails():
     return (
         "You are a careful EU/German capital markets law tutor. "
-        "Always ground your answers in the MODEL ANSWER (authoritative) AND the provided web SOURCES. "
-        "If there is any conflict or doubt, follow the MODEL ANSWER and explain briefly. "
-        "If the STUDENT ANSWER has nothing to do with the part of the MODEL ANSWER corresponding to the question chose, say something like: Are you sure your answer corresponds to the question you selected? "
+        "Use ONLY: (1) the rubric signals provided, (2) the GOLD POINTS (authoritative teaching targets), and "
+        "(3) the numbered legal sources/excerpts. "
+        "Do NOT mention hidden materials; do NOT imply a secret model answer exists. "
+        "Do not invent rules beyond the citations and gold points. "
+        "Favor concise, didactic feedback with precise [n] citations."
+        "If the STUDENT ANSWER has nothing to do with what you expected, ask student whether he selected the correct question. "
         "If STUDENT ANSWER contains incorrect statements, point this out and explain how these are incorrect. "
         "If STUDENT ANSWER misses central concepts, point this out and explain why they are relevant. "
         "Cite sources as [1], [2], etc., matching the SOURCES list exactly. Cite specific parts of COURSE BOOKLET so students can follow up. Do not refer to MODEL ANSWER as students cannot access it. "
@@ -417,41 +438,49 @@ def system_guardrails():
         "Be concise and didactic. "
     )
 
-def build_feedback_prompt(student_answer: str, rubric: Dict, model_answer: str, sources_block: str, excerpts_block: str) -> str:
-    return f"""GRADE THE STUDENT'S ANSWER USING THE RUBRIC, DETECTED ISSUES, AND WEB SOURCES.
+def build_feedback_prompt(student_answer: str, rubric: Dict, gold_points: List[str],
+                          sources_block: str, excerpts_block: str) -> str:
+    return f"""
+You are a careful EU/German capital markets law tutor.
+Use ONLY: (1) the rubric signals below, (2) the GOLD POINTS (authoritative teaching targets), and (3) the cited legal EXCERPTS.
+Do NOT reveal internal materials. Do NOT invent rules beyond the citations and gold points.
 
 STUDENT ANSWER:
 \"\"\"{student_answer}\"\"\"
 
 RUBRIC SCORES:
-- Similarity to model answer: {rubric['similarity_pct']}%
+- Similarity to target: {rubric['similarity_pct']}%
 - Issue coverage: {rubric['coverage_pct']}%
 - Overall score: {rubric['final_score']}%
 
-DETECTED SUBSTANTIVE FLAGS:
-{json.dumps(rubric['substantive_flags'], ensure_ascii=False)}
+MISSED BY ISSUE (machine-detected):
+{json.dumps(rubric['missing'], ensure_ascii=False)}
 
-MODEL ANSWER (AUTHORITATIVE):
-\"\"\"{model_answer}\"\"\"
+GOLD POINTS (authoritative targets):
+- {chr(10) + "- ".join(gold_points)}
 
 SOURCES (numbered):
 {sources_block}
 
-EXCERPTS (quote sparingly; use [n] to cite):
+EXCERPTS (quote sparingly; cite as [n]):
 {excerpts_block}
 
 TASK:
-Provide actionable educational feedback. Write no more than 400 words. End with a concluding sentence. Do not start new sections. Correct mis-citations (e.g., Art 3(1) PR -> Art 3(3) PR; § 40 WpHG -> § 43(1) WpHG).
-Explain briefly why, with citations [n]. Where students cite wrong legal provisions, correct. Where students make false statements, point this out and explain how they are wrong. If central aspects are missing from the student's answer, point this out and explain why it is relevant. If sources diverge, follow the MODEL ANSWER.
+Provide ≤ 400 words of actionable feedback: correct errors, add missing core points, and cite [n] precisely.
+If a cited provision is wrong, correct it and explain briefly why.
+Prioritize the missed items and keep a didactic tone.
 """
 
-def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_block: str, excerpts_block: str) -> List[Dict]:
+def build_chat_messages(chat_history: List[Dict], gold_points: List[str],
+                        sources_block: str, excerpts_block: str) -> List[Dict]:
     msgs = [{"role": "system", "content": system_guardrails()}]
+    # keep short recent history
     for m in chat_history[-8:]:
-        if m["role"] in ("user", "assistant"): msgs.append(m)
-    # Pin authoritative context and sources
-    msgs.append({"role": "system", "content": "MODEL ANSWER (authoritative):\n" + model_answer})
-    msgs.append({"role": "system", "content": "SOURCES:\n" + sources_block})
+        if m["role"] in ("user", "assistant"):
+            msgs.append(m)
+    # Pin authoritative, non-leaking context
+    msgs.append({"role": "system", "content": "GOLD POINTS (authoritative targets):\n- " + "\n- ".join(gold_points)})
+    msgs.append({"role": "system", "content": "SOURCES (numbered):\n" + sources_block})
     msgs.append({"role": "system", "content": "RELEVANT EXCERPTS (quote sparingly):\n" + excerpts_block})
     return msgs
 
@@ -467,6 +496,16 @@ def render_sources_used(source_lines: list[str]) -> None:
 def clear_chat_draft():
     # Clear the persistent composer safely during the button's on_click callback
     st.session_state["chat_draft"] = ""
+
+def violates_leak_policies(text: str) -> list[str]:
+    flags = []
+    if re.search(r"\bmodel answer\b|\bauthoritative answer\b|\bhidden solution\b", text, re.I):
+        flags.append("Mentions hidden/internal answers.")
+    # Overlong quotes (encourage paraphrase)
+    long_quotes = re.findall(r"“([^”]{400,})”|\"([^\"]{400,})\"", text)
+    if any(any(group) for group in long_quotes):
+        flags.append("Contains a very long quotation. Prefer paraphrase with [n].")
+    return flags
 
 # --- Chat callbacks ------------------------------------------------------------
 def clear_chat_draft():
@@ -616,7 +655,14 @@ with colA:
                 top_pages, source_lines = [], []
                 if enable_web:
                     pages = collect_corpus(student_answer, "", max_fetch=22)
-                    top_pages, source_lines = retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend, top_k_pages=max_sources, chunk_words=170)
+                    # Build a focused RAG query: student answer + gold points + missed keywords
+                    gold_points = GOLD_POINTS[selected_question]
+                    missed_flat = [kw for miss in rubric["missing"] for kw in miss.get("missed_keywords", [])]
+                    rag_query = (student_answer or "") + "\n\n" + " ".join(gold_points) + "\n\n" + " ".join(missed_flat)
+
+                top_pages, source_lines = retrieve_snippets_with_manual(
+                    rag_query, "", pages, backend, top_k_pages=max_sources, chunk_words=170
+                )
                     
             # Breakdown
             with st.expander("🔬 Issue-by-issue breakdown"):
@@ -642,15 +688,24 @@ with colA:
 
             st.markdown("### 🧭 Narrative Feedback (with citations)")
             if api_key:
+                gold_points = GOLD_POINTS[selected_question]
                 messages = [
                     {"role": "system", "content": system_guardrails()},
-                    {"role": "user", "content": build_feedback_prompt(student_answer, rubric, model_answer_filtered, sources_block, excerpts_block)},
+                    {"role": "user", "content": build_feedback_prompt(student_answer, rubric, gold_points, sources_block, excerpts_block)},
                 ]
+                
                 reply = call_groq(messages, api_key, model_name=model_name, temperature=temp, max_tokens=480)
                 if reply:
-                    st.write(reply)
-                else:
-                    st.info("LLM unavailable. See corrections above and the issue breakdown.")
+                    flags = violates_leak_policies(reply)
+                    if flags:
+                        # Show a small note to you (instructor) or to the student as you prefer
+                        # Option A: surface flags (instructor mode) – comment out in student mode
+                        # st.warning("Safety rephrase applied: " + "; ".join(flags))
+                        # Minimal intervention: prepend an unobtrusive note
+                    reply = "Note: reformulated to avoid revealing internal materials and to paraphrase long quotes.\n\n" + reply
+                st.write(reply)
+            else:
+                st.info("LLM unavailable. See corrections above and the issue breakdown.")
             else:
                 st.info("No GROQ_API_KEY found in secrets/env. Deterministic scoring and corrections shown above.")
 
@@ -694,12 +749,14 @@ with colB:
             top_pages, source_lines = [], []
             if enable_web:
                 pages = collect_corpus(student_answer, user_q, max_fetch=20)
-                top_pages, source_lines = retrieve_snippets_with_manual(
-                    (student_answer or "") + "\n\n" + user_q,
-                    model_answer_filtered, pages, backend,
-                    top_k_pages=max_sources, chunk_words=170
-                )
 
+                gold_points = GOLD_POINTS[selected_question]
+                chat_query = (student_answer or "") + "\n\n" + user_q + "\n\n" + " ".join(gold_points)
+                
+                top_pages, source_lines = retrieve_snippets_with_manual(
+                    chat_query, "", pages, backend, top_k_pages=max_sources, chunk_words=170
+                )
+                
             sources_block = "\n".join(source_lines) if source_lines else "(no web sources available)"
             excerpts_items = []
             for i, tp in enumerate(top_pages):
@@ -708,7 +765,7 @@ with colB:
             excerpts_block = "\n\n".join(excerpts_items[: max_sources * 3]) if excerpts_items else "(no excerpts)"
 
             if api_key:
-                msgs = build_chat_messages(st.session_state.chat_history, model_answer_filtered, sources_block, excerpts_block)
+                msgs = build_chat_messages(st.session_state.chat_history, GOLD_POINTS[selected_question], sources_block, excerpts_block)
                 reply = call_groq(msgs, api_key, model_name=model_name, temperature=temp, max_tokens=600)
             else:
                 reply = None
@@ -716,9 +773,15 @@ with colB:
                 reply = (
                     "I couldn’t reach the LLM. Here are the most relevant source snippets:\n\n"
                     + (excerpts_block if excerpts_block != "(no excerpts)" else "— no sources available —")
-                    + "\n\nIn doubt, follow the model answer."
+                    + "\n\nPlease rely on the cited legal sources."
                 )
-
+            else:
+                # ✅ Call the helper here too
+                flags = violates_leak_policies(reply)
+                if flags:
+                    # Optional: st.warning("Safety rephrase applied: " + "; ".join(flags))
+                reply = "Note: reformulated to avoid revealing internal materials and to paraphrase long quotes.\n\n" + reply
+                 
         # Append the assistant message WITH its per-message sources
         st.session_state.chat_history.append({
             "role": "assistant",

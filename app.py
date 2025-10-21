@@ -780,7 +780,7 @@ with colB:
                 flags = violates_leak_policies(reply)
                 if flags:
                     # Optional: st.warning("Safety rephrase applied: " + "; ".join(flags))
-                reply = "Note: reformulated to avoid revealing internal materials and to paraphrase long quotes.\n\n" + reply
+                    reply = "Note: reformulated to avoid revealing internal materials and to paraphrase long quotes.\n\n" + reply
                  
         # Append the assistant message WITH its per-message sources
         st.session_state.chat_history.append({

@@ -443,6 +443,9 @@ def system_guardrails():
 
 def build_feedback_prompt(student_answer: str, rubric: Dict, model_answer: str,
                           sources_block: str, excerpts_block: str) -> str:
+    # derive the checklist from the deterministic rubric
+    issue_names = [row["issue"] for row in rubric.get("per_issue", [])]
+
     return f"""
 GRADE THE STUDENT'S ANSWER USING THE RUBRIC AND THE WEB/BOOKLET SOURCES.
 
@@ -453,8 +456,9 @@ RUBRIC SUMMARY:
 - Similarity to model answer: {rubric.get('similarity_pct', 0)}%
 - Issue coverage: {rubric.get('coverage_pct', 0)}%
 - Overall score: {rubric.get('final_score', 0)}%
-DETECTED SUBSTANTIVE FLAGS:
-{json.dumps(rubric.get('substantive_flags', []), ensure_ascii=False)}
+
+RUBRIC ISSUES TO COVER:
+- {", ".join(issue_names) if issue_names else "—"}
 
 MODEL ANSWER (AUTHORITATIVE):
 \"\"\"{model_answer}\"\"\"
@@ -465,16 +469,13 @@ SOURCES (numbered; cite as [1], [2], ...):
 EXCERPTS (quote sparingly; use [n] to cite):
 {excerpts_block}
 
-RUBRIC ISSUES TO COVER:
-- {", ".join([issue["name"] for issue in required_issues])}
-
 TASK:
 Provide actionable educational feedback in ≤400 words.
 Cover ALL rubric issues for this question, even if the student did not mention them.
 Start by suggesting a better answer if the student's conclusion deviates from the model answer (e.g., 'In fact, the CFA is inside information under Art 7(1),(2) MAR because…').
 Explain why the student's statement is incorrect, citing [n].
 Then point out missing points.
-If points are missing, exülain why they are important.
+If points are missing, explain why they are important.
 Correct mis-citations succinctly, e.g., where a student cites article 3 or 3(1) instead of article 3(3), give the correct citation.
 Do not disclose internal materials or say that a hidden model answer exists; rely on the numbered sources and the summary above.
 Do not disclose scorings.
@@ -827,14 +828,18 @@ with colA:
 
             st.markdown("### 🧭 Narrative Feedback (with citations)")
             if api_key:
+                # Trim large blocks *before* building the prompt
+                sources_block = truncate_block(sources_block, 1200)
+                excerpts_block = truncate_block(excerpts_block, 3200)
+            
                 messages = [
                     {"role": "system", "content": system_guardrails()},
                     {"role": "user", "content": build_feedback_prompt(student_answer, rubric, model_answer_filtered, sources_block, excerpts_block)},
                 ]
-                # Trim large blocks to avoid overlong prompts
-                sources_block = truncate_block(sources_block, 1200)
-                excerpts_block = truncate_block(excerpts_block, 3200)  # reduce prompt size
-                reply = generate_with_continuation(messages, api_key, model_name=model_name, temperature=temp, first_tokens=1200, continue_tokens=350)
+            
+                reply = generate_with_continuation(messages, api_key, model_name=model_name, temperature=temp,
+                                   first_tokens=1200, continue_tokens=350)
+                
                 if reply:
                     st.write(reply)
                 else:
@@ -888,16 +893,29 @@ with colB:
                     top_k_pages=max_sources, chunk_words=170
                 )
 
+            
             sources_block = "\n".join(source_lines) if source_lines else "(no web sources available)"
             excerpts_items = []
-            for i, tp in enumerate(top_pages):
-                for sn in tp["snippets"]:
-                    excerpts_items.append(f"[{i+1}] {sn}")
+                for i, tp in enumerate(top_pages):
+                    for sn in tp["snippets"]:
+                        excerpts_items.append(f"[{i+1}] {sn}")
             excerpts_block = "\n\n".join(excerpts_items[: max_sources * 3]) if excerpts_items else "(no excerpts)"
+            
+            # ✅ Trim large blocks BEFORE building the prompt to free tokens for the answer
+            sources_block  = truncate_block(sources_block, 1200)
+            excerpts_block = truncate_block(excerpts_block, 3200)
 
             if api_key:
-                msgs = build_chat_messages(st.session_state.chat_history, model_answer_filtered, sources_block, excerpts_block)
-                reply = generate_with_continuation(msgs, api_key, model_name=model_name, temperature=temp, first_tokens=1200, continue_tokens=350)
+                msgs = build_chat_messages(
+                    st.session_state.chat_history,
+                    model_answer_filtered,
+                    sources_block,
+                    excerpts_block
+                )
+                reply = generate_with_continuation(
+                    msgs, api_key, model_name=model_name, temperature=temp,
+                    first_tokens=1200, continue_tokens=350
+                )
             else:
                 reply = None
             if not reply:

@@ -702,10 +702,10 @@ with colA:
                         # Option A: surface flags (instructor mode) – comment out in student mode
                         # st.warning("Safety rephrase applied: " + "; ".join(flags))
                         # Minimal intervention: prepend an unobtrusive note
-                    reply = "Note: reformulated to avoid revealing internal materials and to paraphrase long quotes.\n\n" + reply
-                st.write(reply)
-            else:
-                st.info("LLM unavailable. See corrections above and the issue breakdown.")
+                        reply = "Note: reformulated to avoid revealing internal materials and to paraphrase long quotes.\n\n" + reply
+                    st.write(reply)
+                else:
+                    st.info("LLM unavailable. See corrections above and the issue breakdown.")
             else:
                 st.info("No GROQ_API_KEY found in secrets/env. Deterministic scoring and corrections shown above.")
 

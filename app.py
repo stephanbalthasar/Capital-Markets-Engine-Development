@@ -430,7 +430,6 @@ if filtered_chunks:
             source_lines.append(f"[{i+1}] {tp['title']}")
         else:
             source_lines.append(f"[{i+1}] {tp['title']} — {tp['url']}")
-
     return top_pages, source_lines
 
 # ---------------- LLM via Groq (free) ----------------

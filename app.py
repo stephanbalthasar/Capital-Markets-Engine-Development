@@ -465,9 +465,13 @@ SOURCES (numbered; cite as [1], [2], ...):
 EXCERPTS (quote sparingly; use [n] to cite):
 {excerpts_block}
 
+RUBRIC ISSUES TO COVER:
+- {", ".join([issue["name"] for issue in required_issues])}
+
 TASK:
 Provide actionable educational feedback in ≤400 words.
-Start by stating the correct conclusion if the student's conclusion is wrong (e.g., 'In fact, the CFA is inside information under Art 7(1),(2) MAR because…').
+Cover ALL rubric issues for this question, even if the student did not mention them.
+Start by suggesting a better answer if the student's conclusion deviates from the model answer (e.g., 'In fact, the CFA is inside information under Art 7(1),(2) MAR because…').
 Explain why the student's statement is incorrect, citing [n].
 Then point out missing points.
 If points are missing, exülain why they are important.
@@ -475,6 +479,7 @@ Correct mis-citations succinctly, e.g., where a student cites article 3 or 3(1) 
 Do not disclose internal materials or say that a hidden model answer exists; rely on the numbered sources and the summary above.
 Do not disclose scorings.
 Paraphrase rather than quoting long passages; keep the tone clear, didactic, and practical.
+Use a clear structure: (1) Correct conclusion, (2) Errors explained, (3) Missing points, (4) Improvement tips.
 End with a short concluding sentence.
 """
 

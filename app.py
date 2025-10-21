@@ -156,6 +156,32 @@ def filter_model_answer_and_rubric(selected_question):
     selected_issues = [issue for issue in REQUIRED_ISSUES if issue["name"] in QUESTION_MAP[selected_question]]
     return model_answer_filtered, selected_issues
 
+# ---- Manual relevance terms per question ----
+MANUAL_KEY_TERMS = {
+    "Question 1": [
+        "MAR", "Art 7", "Article 7", "Art 17",
+        "inside information", "Insiderinformation",
+        "precise nature", "intermediate step", "protracted process",
+        "delay", "Verzögerung", "mislead", "irreführung"
+    ],
+    "Question 2": [
+        "Prospectus Regulation", "2017/1129",
+        "Art 3(3)", "Article 3(3)", "admission to trading",
+        "Art 1(5)(a)", "Article 1(5)(a)", "20%", "secondary issuance",
+        "MiFID", "4(1)(44)", "transferable securities", "Prospekt"
+    ],
+    "Question 3": [
+        "WpHG", "§ 33", "§ 34", "acting in concert", "gemeinschaftliches Handeln",
+        "WpÜG", "§ 29", "§ 30", "§ 35", "§ 59", "Pflichtangebot", "Kontrolle", "30%"
+    ]
+}
+
+def manual_chunk_relevant(text: str, selected_question: str) -> bool:
+    """Return True if the manual chunk contains any key term for the active question."""
+    terms = MANUAL_KEY_TERMS.get(selected_question, [])
+    low = text.lower()
+    return any(term.lower() in low for term in terms)
+
 # ---------------- Robust keyword & citation checks ----------------
 def normalize_ws(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
@@ -338,7 +364,19 @@ def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages:
                                                                       chunk_words_hint=chunk_words)
     except Exception as e:
         st.warning(f"Could not load course manual: {e}")
+    
+    # ✅ Filter manual chunks by the active question to avoid irrelevant booklet citations
+    selected_q = st.session_state.get("selected_question", "Question 1")
+    filtered_chunks, filtered_metas = [], []
+    for ch, m in zip(manual_chunks, manual_metas):
+        if manual_chunk_relevant(ch, selected_q):
+            filtered_chunks.append(ch)
+            filtered_metas.append(m)
 
+# If filtering removes everything (e.g., unusual terms), fall back to the original set
+if filtered_chunks:
+    manual_chunks, manual_metas = filtered_chunks, filtered_metas
+                                      
     # Build manual meta tuples with a unique key per *page* so we can group snippets by page
     manual_meta = []
     for m in manual_metas:
@@ -364,10 +402,16 @@ def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages:
     qv, cvs = embs[0], embs[1:]
     sims = [cos_sim(qv, v) for v in cvs]
     idx = np.argsort(sims)[::-1]
+    
+    # ✅ Similarity floor to keep only reasonably relevant snippets
+    MIN_SIM = 0.12  # tune 0.10–0.18 if needed
 
     # ---- Select top snippets grouped by (manual page) or (web page index)
+
     per_page = {}
-    for j in idx[:400]:
+    for j in idx:
+        if sims[j] < MIN_SIM:
+            break
         pi, url, title = all_meta[j]
         snip = all_chunks[j]
         arr = per_page.setdefault(pi, {"url": url, "title": title, "snippets": []})
@@ -375,7 +419,7 @@ def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages:
             arr["snippets"].append(snip)
         if len(per_page) >= top_k_pages:
             break
-
+        
     # Order by key and build source lines. For manual items we already have 'title' as a full citation line.
     top_pages = [per_page[k] for k in sorted(per_page.keys())][:top_k_pages]
 
@@ -818,6 +862,7 @@ selected_question = st.selectbox(
     index=0,
     help="This limits feedback to the selected question only."
 )
+st.session_state["selected_question"] = selected_question
 
 st.subheader("📝 Your Answer")
 student_answer = st.text_area("Write your solution here (≥ ~120 words).", height=260)

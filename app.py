@@ -611,10 +611,11 @@ def split_into_paragraphs(text: str) -> list[str]:
 # Paragraph markers: para. 115 / Rn. 115 / [115] / (115)
 _para_patterns = [
     re.compile(r"\bpara(?:graph)?\.?\s*(\d{1,4})\b", re.I),
-    re.compile(r"\bRn\.?\s*(\d{1,4})\b", re.I),          # German "Rn." = Randnummer
-    re.compile(r"\[(\d{1,4})\]"),                         # [115]
-    re.compile(r"\((\d{1,4})\)"),                         # (115)
+    re.compile(r"\bRn\.?\s*(\d{1,4})\b", re.I),
+    re.compile(r"\[(\d{1,4})\]"),
+    re.compile(r"\((\d{1,4})\)")
 ]
+
 # Case markers: "Case 14" or "Fall 14"
 _case_pattern = re.compile(r"\b(?:Case|Fall)\s*(\d{1,4})\b", re.I)
 

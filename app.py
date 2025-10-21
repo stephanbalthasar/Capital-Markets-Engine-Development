@@ -360,11 +360,13 @@ def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages:
     # ---- Load & chunk Course Booklet with page/para/case metadata
     manual_chunks, manual_metas = [], []
     try:
-        manual_chunks, manual_metas = extract_manual_chunks_with_refs("assets/EUCapML - Course Booklet.pdf",
-                                                                      chunk_words_hint=chunk_words)
+        manual_chunks, manual_metas = extract_manual_chunks_with_refs(
+            "assets/EUCapML - Course Booklet.pdf",
+            chunk_words_hint=chunk_words
+        )
     except Exception as e:
         st.warning(f"Could not load course manual: {e}")
-    
+
     # ✅ Filter manual chunks by the active question to avoid irrelevant booklet citations
     selected_q = st.session_state.get("selected_question", "Question 1")
     filtered_chunks, filtered_metas = [], []
@@ -373,15 +375,15 @@ def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages:
             filtered_chunks.append(ch)
             filtered_metas.append(m)
 
-# If filtering removes everything (e.g., unusual terms), fall back to the original set
-if filtered_chunks:
-    manual_chunks, manual_metas = filtered_chunks, filtered_metas
-                                      
-    # Build manual meta tuples with a unique key per *page* so we can group snippets by page
+    # If filtering removes everything (e.g., unusual terms), fall back to the original set
+    if filtered_chunks:
+        manual_chunks, manual_metas = filtered_chunks, filtered_metas
+
+    # ---- Prepare manual meta tuples with a unique key per *page* so we can group snippets by page
     manual_meta = []
     for m in manual_metas:
-        page_key = -(m["page"])              # negative keys for manual pages
-        citation = format_manual_citation(m) # pre-format a nice line
+        page_key = -(m["page"])  # negative keys for manual pages
+        citation = format_manual_citation(m)  # pre-format a nice line
         # We store citation in 'title' so we can reuse downstream without new structures
         manual_meta.append((page_key, "manual://course-booklet", citation))
 
@@ -392,22 +394,21 @@ if filtered_chunks:
             web_chunks.append(ch)
             web_meta.append((i + 1, p["url"], p["title"]))
 
-    # ---- Build corpus
+    # ---- Build combined corpus
     all_chunks = manual_chunks + web_chunks
     all_meta   = manual_meta   + web_meta
 
-    # Query vector built from student + model slice (as you have now)
+    # Query vector built from student + model slice
     query = (student_answer or "") + "\n\n" + (model_answer or "")
     embs = embed_texts([query] + all_chunks, backend)
     qv, cvs = embs[0], embs[1:]
     sims = [cos_sim(qv, v) for v in cvs]
     idx = np.argsort(sims)[::-1]
-    
+
     # ✅ Similarity floor to keep only reasonably relevant snippets
     MIN_SIM = 0.12  # tune 0.10–0.18 if needed
 
     # ---- Select top snippets grouped by (manual page) or (web page index)
-
     per_page = {}
     for j in idx:
         if sims[j] < MIN_SIM:
@@ -419,17 +420,18 @@ if filtered_chunks:
             arr["snippets"].append(snip)
         if len(per_page) >= top_k_pages:
             break
-        
+
     # Order by key and build source lines. For manual items we already have 'title' as a full citation line.
     top_pages = [per_page[k] for k in sorted(per_page.keys())][:top_k_pages]
 
     source_lines = []
     for i, tp in enumerate(top_pages):
         if tp["url"].startswith("manual://"):
-            # already a fully formatted citation like: "Course Booklet — p. 2, Case 14, para. 115"
+            # already a fully formatted citation like: "Course Booklet — p. ii (PDF p. 4), para. 115"
             source_lines.append(f"[{i+1}] {tp['title']}")
         else:
             source_lines.append(f"[{i+1}] {tp['title']} — {tp['url']}")
+
     return top_pages, source_lines
 
 # ---------------- LLM via Groq (free) ----------------

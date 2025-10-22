@@ -177,8 +177,7 @@ def filter_model_answer_and_rubric(selected_question: str, model_answer: str, ap
 
     extracted_issues = extract_issues_from_model_answer(model_answer_filtered, api_key)
     return model_answer_filtered, extracted_issues
-    extracted_keywords = [kw for issue in extracted_issues for kw in issue.get("keywords", [])]
-
+    
 # ---------------- Robust keyword & citation checks ----------------
 def normalize_ws(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
@@ -984,6 +983,7 @@ with colA:
             with st.spinner("Scoring and collecting sources..."):
                 backend = load_embedder()
                 model_answer_filtered, extracted_issues = filter_model_answer_and_rubric(selected_question, MODEL_ANSWER, api_key)
+                extracted_keywords = [kw for issue in extracted_issues for kw in issue.get("keywords", [])]
                 rubric = generate_rubric_from_model_answer(
                     student_answer,
                     MODEL_ANSWER,
@@ -1085,9 +1085,19 @@ with colB:
             backend = load_embedder()
             top_pages, source_lines = [], []
             if enable_web:
+                model_answer_filtered, extracted_issues = filter_model_answer_and_rubric(
+                    st.session_state.get("selected_question", "Question 1"),
+                    MODEL_ANSWER,
+                    api_key
+                )
+                extracted_keywords = [kw for issue in extracted_issues for kw in issue.get("keywords", [])]
+
                 pages = collect_corpus(student_answer, user_q, max_fetch=20)
-                top_pages, source_lines = retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend, extracted_keywords, top_k_pages=max_sources, chunk_words=170)
-                            
+                top_pages, source_lines = retrieve_snippets_with_manual(
+                    student_answer, model_answer_filtered, pages, backend, extracted_keywords,
+                    top_k_pages=max_sources, chunk_words=170
+                )
+                                            
             sources_block = "\n".join(source_lines) if source_lines else "(no web sources available)"
             excerpts_items = []
             for i, tp in enumerate(top_pages):

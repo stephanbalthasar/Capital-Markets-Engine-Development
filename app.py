@@ -388,18 +388,30 @@ def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages:
         manual_meta.append((page_key, "manual://course-booklet", citation))
 
     # ---- Prepare web chunks (unchanged)
+    # ---- Prepare web chunks (fixed: keep meta 1:1 with chunks)
     web_chunks, web_meta = [], []
     selected_q = st.session_state.get("selected_question", "Question 1")
     for i, p in enumerate(pages):
-        if not web_page_relevant(p.get("text", ""), selected_q):
+        text = p.get("text", "")
+        if not text:
             continue
-        for ch in split_into_chunks(p["text"], max_words=chunk_words):
+    # Optional relevance filter (keep if you added MANUAL_KEY_TERMS):
+        if 'web_page_relevant' in globals() and not web_page_relevant(text, selected_q):
+            continue
+
+        chunks_i = split_into_chunks(text, max_words=chunk_words)
+        for ch in chunks_i:
             web_chunks.append(ch)
-        web_meta.append((i + 1, p["url"], p["title"]))
+            web_meta.append((i + 1, p["url"], p["title"]))  # append meta PER CHUNK
 
     # ---- Build combined corpus
     all_chunks = manual_chunks + web_chunks
     all_meta   = manual_meta   + web_meta
+    # Defensive: keep chunks and meta in lockstep
+    if len(all_chunks) != len(all_meta):
+        m = min(len(all_chunks), len(all_meta))
+        all_chunks = all_chunks[:m]
+        all_meta   = all_meta[:m]
 
     # Query vector built from student + model slice
     query = (student_answer or "") + "\n\n" + (model_answer or "")

@@ -356,7 +356,7 @@ def collect_corpus(student_answer: str, extra_user_q: str, max_fetch: int = 20) 
 def manual_chunk_relevant(text: str, extracted_keywords: list[str]) -> bool:
     return any(kw.lower() in text.lower() for kw in extracted_keywords)
 
-def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend, top_k_pages=5, chunk_words=170, extracted_keywords=None):
+def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend, extracted_keywords, top_k_pages=8, chunk_words=170):
 
                                       
     # ---- Load & chunk Course Booklet with page/para/case metadata
@@ -373,7 +373,7 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
     selected_q = st.session_state.get("selected_question", "Question 1")
     filtered_chunks, filtered_metas = [], []
     for ch, m in zip(manual_chunks, manual_metas):
-        if manual_chunk_relevant(chunk, extracted_keywords):
+        if manual_chunk_relevant(ch, extracted_keywords):
             filtered_chunks.append(ch)
             filtered_metas.append(m)
 
@@ -995,7 +995,7 @@ with colA:
                 top_pages, source_lines = [], []
                 if enable_web:
                     pages = collect_corpus(student_answer, "", max_fetch=22)
-                    top_pages, source_lines = retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend, top_k_pages=max_sources, chunk_words=170)
+                    top_pages, source_lines = retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend, extracted_keywords, top_k_pages=max_sources, chunk_words=170)
                     
             # Breakdown
             with st.expander("🔬 Issue-by-issue breakdown"):
@@ -1086,13 +1086,8 @@ with colB:
             top_pages, source_lines = [], []
             if enable_web:
                 pages = collect_corpus(student_answer, user_q, max_fetch=20)
-                top_pages, source_lines = retrieve_snippets_with_manual(
-                    (student_answer or "") + "\n\n" + user_q,
-                    model_answer_filtered, pages, backend,
-                    top_k_pages=max_sources, chunk_words=170
-                )
-
-            
+                top_pages, source_lines = retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend, extracted_keywords, top_k_pages=max_sources, chunk_words=170)
+                            
             sources_block = "\n".join(source_lines) if source_lines else "(no web sources available)"
             excerpts_items = []
             for i, tp in enumerate(top_pages):

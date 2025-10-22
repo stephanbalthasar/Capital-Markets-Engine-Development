@@ -415,7 +415,7 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
         all_meta   = all_meta[:m]
 
     # Query vector built from student + model slice
-    query = (student_answer or "") + "\n\n" + (model_answer or "")
+    query = (student_answer or "") + "\n\n" + (model_answer_filtered or "")
     embs = embed_texts([query] + all_chunks, backend)
     qv, cvs = embs[0], embs[1:]
     sims = [cos_sim(qv, v) for v in cvs]

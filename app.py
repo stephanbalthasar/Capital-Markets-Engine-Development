@@ -540,10 +540,10 @@ EXCERPTS (quote sparingly; cite using [1], [2], …):
 {excerpts_block}
 
 TASK (you MUST follow these steps):
-1) Extract the student's core CLAIMS as short bullets (no more than 3–5 bullets). For EACH claim, label it Correct / Incorrect / Not supported and if relevant, attach a numeric citation [n] to the specific rule you rely on.
+1) Extract the student's core CLAIMS as short bullets (no more than 3–5 bullets). For EACH claim, give it one of the labesl "Correct" / "Incorrect" / "Not supported".
 2) Where you label a student core claim as incorrect, explain briefly why.
 3) Where important aspects are missing, explain what aspects are missing, and why they are important. 
-4) Give concise IMPROVEMENT TIPS (1–3 bullets) tied to the rubric issues, each with a numeric citation.
+4) Give concise IMPROVEMENT TIPS (1–3 bullets) tied to the rubric issues, ideally with a numeric citation.
 5) End with a single-sentence CONCLUSION.
 
 RULES:

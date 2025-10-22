@@ -475,10 +475,10 @@ def system_guardrails():
         "2. If SOURCES conflict with MODEL ANSWER, follow the MODEL ANSWER and briefly explain why.\n"
         "3. Never reveal or mention that a hidden model answer exists.\n\n"
         "CITATIONS POLICY:\n"
-        "- Cite ONLY using [n], where n refers to the SOURCES list below.\n"
-        "- Never invent Course Booklet references (pages, paragraphs, cases). "
-        "  Only refer to the Course Booklet by citing the corresponding [n] that appears in the SOURCES list; "
-        "  do NOT fabricate page/para/case numbers.\n"
+        "- Cite ONLY using numeric brackets that match the SOURCES list (e.g., [1], [2]).\n"
+        "- NEVER write the literal placeholder “[n]”.\n"
+        "- Never invent Course Booklet references (pages, paragraphs, cases). Only cite the numbered SOURCES.\n\n"
+        "- Do NOT fabricate page/para/case numbers.\n"
         "- Do not cite any material that does not appear in the SOURCES list.\n\n"
         "FEEDBACK PRINCIPLES:\n"
         "- If the student's conclusion is incorrect, explicitly state the correct conclusion first, then explain why with citations [n].\n"
@@ -516,10 +516,16 @@ MODEL ANSWER (AUTHORITATIVE):
 \"\"\"{model_answer}\"\"\"
 
 SOURCES (numbered; you must cite ONLY from this list. Never invent Course Booklet references):
-{sources_block}
-
-EXCERPTS (quote sparingly; cite as [n]):
+{s_sources}
+EXCERPTS (quote sparingly; cite using the numeric bracket from SOURCES, e.g., [1], [2]):
 {excerpts_block}
+...
+Start by stating the correct conclusion ... and support it with precise numeric citations ([1], [2]).
+Then:
+- Explain why any incorrect statements are wrong, with numeric citations.
+- Add missing points for ALL rubric issues and why they matter (with [1], [2]).
+...
+IMPORTANT: Cite ONLY the numbered SOURCES above (use [1], [2]...). Do NOT invent any Course Booklet references.
 
 TASK:
 Write ≤400 words of actionable feedback.
@@ -548,7 +554,24 @@ def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_blo
     msgs.append({"role": "system", "content": "RELEVANT EXCERPTS (quote sparingly):\n" + excerpts_block})
     return msgs
 
-# ------------------------------ Chat Helpers ----------
+# ------------------------------ Chat and Feebdack Helpers ----------
+def parse_cited_indices(text: str) -> list[int]:
+    """Return sorted unique [n] indices used in text."""
+    try:
+        return sorted(set(int(x) for x in re.findall(r"\[(\d+)\]", text or "")))
+    except Exception:
+        return []
+
+def filter_sources_by_indices(source_lines: list[str], used: list[int]) -> list[str]:
+    """Return only those lines whose [n] was actually cited; preserve numbering."""
+    if not used:
+        return []
+    out = []
+    for n in used:
+        if 1 <= n <= len(source_lines):
+            out.append(source_lines[n - 1])
+    return out
+
 # ---- Output completeness helpers ----
 def is_incomplete_text(text: str) -> bool:
     """Heuristic: returns True if the text likely ends mid-sentence."""
@@ -974,6 +997,7 @@ with colA:
                                    first_tokens=1200, continue_tokens=350)
                 
                 if reply:
+                    reply = re.sub(r"\[(?:n|N)\]", "", reply)
                     st.write(reply)
                 else:
                     st.info("LLM unavailable. See corrections above and the issue breakdown.")
@@ -1057,14 +1081,21 @@ with colB:
                     + (excerpts_block if excerpts_block != "(no excerpts)" else "— no sources available —")
                     + "\n\nIn doubt, follow the model answer."
                 )
+        # ---- SAFETY NET (CHAT): normalize citations + show only cited sources ----
+        # Convert any stray placeholder “[n]” to nothing (prevents literal “[n]” in the chat)
+        reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
 
-        # Append the assistant message WITH its per-message sources
+        # Keep only sources actually cited in the chat reply
+        used_idxs = parse_cited_indices(reply)
+        msg_sources = filter_sources_by_indices(source_lines, used_idxs) or source_lines[:]
+
+        # Append the assistant message WITH its per-message (filtered) sources
         st.session_state.chat_history.append({
             "role": "assistant",
-            "content": reply or "",
-            "sources": source_lines[:]  # persistent per-message list
+            "content": reply,
+            "sources": msg_sources
         })
-
+        
     # --- render FULL history AFTER updates so latest sources appear immediately ---
     for msg in st.session_state.chat_history:
         role = msg.get("role", "")

@@ -493,8 +493,11 @@ def system_guardrails():
         "- Write in the same language as the student's answer when possible (if mixed, default to English)."
     )
 
-def build_feedback_prompt(student_answer: str, rubric: Dict, model_answer: str,
-                          sources_block: str, excerpts_block: str) -> str:
+def build_feedback_prompt(student_answer: str,
+                          rubric: Dict,
+                          model_answer: str,
+                          sources_block: str,
+                          excerpts_block: str) -> str:
     # Derive the coverage checklist from the deterministic rubric you already computed
     issue_names = [row["issue"] for row in rubric.get("per_issue", [])]
 
@@ -515,17 +518,25 @@ RUBRIC ISSUES TO COVER:
 MODEL ANSWER (AUTHORITATIVE):
 \"\"\"{model_answer}\"\"\"
 
-SOURCES (numbered; you must cite ONLY from this list. Never invent Course Booklet references):
-{s_sources}
-EXCERPTS (quote sparingly; cite using the numeric bracket from SOURCES, e.g., [1], [2]):
+SOURCES (numbered; cite using [1], [2], … ONLY from this list):
+{sources_block}
+
+EXCERPTS (quote sparingly; cite using [1], [2], …):
 {excerpts_block}
-...
-Start by stating the correct conclusion ... and support it with precise numeric citations ([1], [2]).
+
+TASK:
+Write ≤400 words of actionable feedback.
+Start by stating the correct conclusion if the student's conclusion is wrong and support it with precise numeric citations ([1], [2]).
 Then:
 - Explain why any incorrect statements are wrong, with numeric citations.
-- Add missing points for ALL rubric issues and why they matter (with [1], [2]).
-...
-IMPORTANT: Cite ONLY the numbered SOURCES above (use [1], [2]...). Do NOT invent any Course Booklet references.
+- Add missing points for ALL rubric issues and why they matter (with numeric citations).
+- Correct mis-citations succinctly (e.g., Art 3(1) PR → Art 3(3) PR).
+- Cover ALL rubric issues for this question, even if the student did not mention them.
+
+IMPORTANT: Cite ONLY the numbered SOURCES above. Do NOT invent any Course Booklet references (pages/paras/cases). If a point is not supported by these sources, say so and avoid making up a citation.
+Paraphrase rather than quoting long passages; keep the tone clear, didactic, and practical.
+End with a short concluding sentence.
+"""
 
 TASK:
 Write ≤400 words of actionable feedback.
@@ -997,7 +1008,9 @@ with colA:
                                    first_tokens=1200, continue_tokens=350)
                 
                 if reply:
-                    reply = re.sub(r"\[(?:n|N)\]", "", reply)
+                    reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
+                    used_idxs = parse_cited_indices(reply)
+                    display_source_lines = filter_sources_by_indices(source_lines, used_idxs) or source_lines
                     st.write(reply)
                 else:
                     st.info("LLM unavailable. See corrections above and the issue breakdown.")
@@ -1084,11 +1097,9 @@ with colB:
         # ---- SAFETY NET (CHAT): normalize citations + show only cited sources ----
         # Convert any stray placeholder “[n]” to nothing (prevents literal “[n]” in the chat)
         reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
-
-        # Keep only sources actually cited in the chat reply
         used_idxs = parse_cited_indices(reply)
         msg_sources = filter_sources_by_indices(source_lines, used_idxs) or source_lines[:]
-
+        
         # Append the assistant message WITH its per-message (filtered) sources
         st.session_state.chat_history.append({
             "role": "assistant",

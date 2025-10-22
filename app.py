@@ -608,12 +608,19 @@ def split_into_paragraphs(text: str) -> list[str]:
         out.append(" ".join(cur))
     return out
 
-# Paragraph markers: para. 115 / paragraph 115 / Rn. 115 / [115] / (115)
+# Paragraph markers actually present in the booklet:
+#  - "para. 115"/"paragraph 115"/"Rn. 115"
+#  - left-margin bold numbers extracted as **176**, ** 10 **, etc.
 _para_patterns = [
-    re.compile(r"\bpara(?:graph)?\.?\s*(\d{1,4})\b", re.I),  # para. 115 / paragraph 115
-    re.compile(r"\brn\.?\s*(\d{1,4})\b", re.I),              # Rn. 115
-    re.compile(r"\[\s*(\d{1,4})\s*\]"),                      # [115]
-    re.compile(r"\(\s*(\d{1,4})\s*\)"),                      # (115)
+    re.compile(r"\bpara(?:graph)?\.?\s*(\d{1,4})\b", re.I),
+    re.compile(r"\brn\.?\s*(\d{1,4})\b", re.I),
+    re.compile(r"\*\*\s*(\d{1,4})\s*\*\*"),
+]
+
+# Case markers: prefer "Case Study N", also accept "Case N"/"Fall N"
+_case_patterns = [
+    re.compile(r"\bCase\s*Study\s*(\d{1,4})\b", re.I),
+    re.compile(r"\b(?:Case|Fall)\s*(\d{1,4})\b", re.I),
 ]
 
 # Case markers: "Case 14" or "Fall 14"
@@ -640,7 +647,9 @@ def detect_para_numbers(text: str) -> list[int]:
     return out
 
 def detect_case_numbers(text: str) -> list[int]:
-    nums = _case_pattern.findall(text)
+    nums = []
+    for pat in _case_patterns:
+        nums += pat.findall(text)
     out = []
     for x in nums:
         if x not in out:
@@ -662,9 +671,11 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
     for pno in range(len(doc)):
         page = doc.load_page(pno)
         page_text = page.get_text("text")
-        page_label = page.get_label() or str(pno + 1)  # printed page label (can be roman numerals)
+        # Remove repeating headers like "Version 11 June 2025" and stray page numbers
+        page_text = clean_page_text(page_text)
+        page_label = page.get_label() or str(pno + 1)
         paras = split_into_paragraphs(page_text)
-
+        
         for para in paras:
             # Break very long paragraphs roughly to the hint size
             words = para.split()
@@ -714,23 +725,54 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
 def format_manual_citation(meta: dict) -> str:
     """
     Build a human-friendly citation like:
-    'Course Booklet — p. ii (PDF p. 4), Case 14, para. 115'
+      'Course Booklet — p. ii (PDF p. 4), Case Study 14; para. 115'
+      or, if only one is available: '..., Case Study 14'  or  '..., para. 115'
     """
     lbl = meta.get("page_label")
     pdfp = meta.get("page_num")
     paras = meta.get("paras") or []
     cases = meta.get("cases") or []
+
     parts = [f"Course Booklet — p. {lbl} (PDF p. {pdfp})"]
+
+    # Collect anchors (we show both if both are present)
+    anchors = []
+
+    # Prefer to show one explicit Case Study number if available
     if cases:
-        parts.append("Case " + (", ".join(map(str, cases)) if len(cases) > 1 else str(cases[0])))
+        anchors.append(f"Case Study {cases[0]}")
+
+    # Add a concise paragraph anchor if available
     if paras:
-        if len(paras) == 1:
-            parts.append(f"para. {paras[0]}")
-        elif len(paras) == 2 and paras[1] == paras[0] + 1:
-            parts.append(f"paras {paras[0]}–{paras[1]}")
-        else:
-            parts.append("paras " + ", ".join(map(str, paras[:3])) + ("…" if len(paras) > 3 else ""))
+        # De-duplicate and sort once, then pick the most helpful concise form
+        xs = sorted(set(int(p) for p in paras if isinstance(p, (int, str)) and str(p).isdigit()))
+        if xs:
+            # If we have at least two and they are consecutive, show a short range; else show the first one
+            if len(xs) >= 2 and xs[1] == xs[0] + 1:
+                anchors.append(f"paras {xs[0]}–{xs[1]}")
+            else:
+                anchors.append(f"para. {xs[0]}")
+
+    if anchors:
+        parts.append("; ".join(anchors))
+
     return ", ".join(parts)
+
+# ---- Simple page cleaner for booklet parsing ----
+def clean_page_text(t: str) -> str:
+    """
+    Drop repeating page header/footer noise (e.g., 'Version 11 June 2025') and lone page numbers.
+    """
+    out = []
+    for ln in t.splitlines():
+        # Header like "Version 11 June 2025"
+        if re.match(r"^\s*Version\s+\d{1,2}\s+\w+\s+\d{4}\s*$", ln):
+            continue
+        # A lone page number line
+        if re.match(r"^\s*\d+\s*$", ln):
+            continue
+        out.append(ln)
+    return "\n".join(out)
 
 # --- Chat callbacks ------------------------------------------------------------
 def clear_chat_draft():

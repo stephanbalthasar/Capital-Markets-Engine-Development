@@ -885,7 +885,7 @@ if not st.session_state.authenticated:
 
     if pin_input == correct_pin:
         st.session_state.authenticated = True
-        st.success("PIN accepted. Click below to continue. By clicking you accept that this tool is based on artificial intelligence and large language model engines, and that accordingly, answers may not be accurate.")
+        st.success("PIN accepted. By clicking CONTINUE below you accept that this tool uses artificial intelligence and large language models, and that accordingly, answers may not be accurate.")
         if st.button("Continue"):
             st.experimental_rerun()
     elif pin_input:

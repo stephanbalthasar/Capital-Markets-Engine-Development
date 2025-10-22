@@ -1018,7 +1018,7 @@ with colA:
                     excerpts_items.append(f"[{i+1}] {sn}")
             excerpts_block = "\n\n".join(excerpts_items[: max_sources * 3]) if excerpts_items else "(no excerpts)"
 
-            st.markdown("### 🧭 Narrative Feedback (with citations)")
+            st.markdown("### 🧭 Narrative Feedback")
             if api_key:
                 # Trim large blocks *before* building the prompt
                 sources_block = truncate_block(sources_block, 1200)

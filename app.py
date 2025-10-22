@@ -536,14 +536,12 @@ EXCERPTS (quote sparingly; cite using [1], [2], …):
 {excerpts_block}
 
 TASK (you MUST follow these steps):
-1) Extract the student's core CLAIMS as short bullets (no more than 3–5 bullets). For EACH claim, label it Correct / Incorrect / Not supported and attach a numeric citation [n] to the specific rule you rely on.
-2) Apply the MAR Q1 EVALUATION PATH irrespective of what the student wrote:
-   • Art. 7(1) MAR: check the four elements (issuer/instrument link, non-public, precise nature, likely significant effect) — cite [n].
-   • Art. 7(2) MAR (“precise nature”): explain the standard and that future events can be precise; you need not know the direction of price movement; only “vague or general” is excluded — cite [n] (ECJ Lafonta).
-   • Art. 17(1) MAR: if inside information, explain the duty to disclose “as soon as possible” — cite [n].
-   • Delay analysis: FIRST test Art. 17(4) MAR (legitimate interest + not misleading + confidentiality). EXPLICITLY state that Art. 17(5) MAR is a special stability provision for credit/financial institutions with competent authority consent; if the issuer is not such an institution, 17(5) does not apply — cite [n].
-3) Give concise IMPROVEMENT TIPS (1–3 bullets) tied to the rubric issues, each with a numeric citation.
-4) End with a single-sentence CONCLUSION.
+If a student answer is clearly irrelevant, ask the student to check whether he selected the right question from the menu. Otherwise, follow these steps:
+1) Extract the student's core CLAIMS as short bullets (no more than 3–5 bullets). For EACH claim, label it Correct / Incorrect / Not supported and if relevant, attach a numeric citation [n] to the specific rule you rely on.
+2) Where you label a student core claim as incorrect, explain briefly why.
+3) Where important aspects are missing, explain what aspects are missing, and why they are important. 
+4) Give concise IMPROVEMENT TIPS (1–3 bullets) tied to the rubric issues, each with a numeric citation.
+5) End with a single-sentence CONCLUSION.
 
 RULES:
 - Use numeric citations matching the SOURCES list (e.g., [1], [2]); never “[n]”.

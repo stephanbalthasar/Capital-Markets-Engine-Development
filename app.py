@@ -494,11 +494,10 @@ def system_guardrails():
     )
 
 def build_feedback_prompt(student_answer: str,
-                          rubric: Dict,
+                          rubric: dict,
                           model_answer: str,
                           sources_block: str,
                           excerpts_block: str) -> str:
-    # Derive the coverage checklist from the deterministic rubric you already computed
     issue_names = [row["issue"] for row in rubric.get("per_issue", [])]
 
     return f"""
@@ -526,20 +525,6 @@ EXCERPTS (quote sparingly; cite using [1], [2], …):
 
 TASK:
 Write ≤400 words of actionable feedback.
-Start by stating the correct conclusion if the student's conclusion is wrong and support it with precise numeric citations ([1], [2]).
-Then:
-- Explain why any incorrect statements are wrong, with numeric citations.
-- Add missing points for ALL rubric issues and why they matter (with numeric citations).
-- Correct mis-citations succinctly (e.g., Art 3(1) PR → Art 3(3) PR).
-- Cover ALL rubric issues for this question, even if the student did not mention them.
-
-IMPORTANT: Cite ONLY the numbered SOURCES above. Do NOT invent any Course Booklet references (pages/paras/cases). If a point is not supported by these sources, say so and avoid making up a citation.
-Paraphrase rather than quoting long passages; keep the tone clear, didactic, and practical.
-End with a short concluding sentence.
-"""
-
-TASK:
-Write ≤400 words of actionable feedback.
 Start by stating the correct conclusion if the student's conclusion is wrong (e.g., "In fact, the CFA is inside information under Art 7(1),(2) MAR because …") and support it with precise [n] citations.
 Then:
 - Explain why any incorrect statements are wrong, with citations [n].
@@ -552,6 +537,10 @@ Do not disclose internal materials or say that a hidden model answer exists; rel
 Do not disclose scorings.
 Paraphrase rather than quoting long passages; keep the tone clear, didactic, and practical.
 Use a clear structure: (1) Correct conclusion, (2) Errors explained, (3) Missing points, (4) Improvement tips.
+End with a short concluding sentence.
+
+IMPORTANT: Cite ONLY the numbered SOURCES above. Do NOT invent any Course Booklet references (pages/paras/cases). If a point is not supported by these sources, say so and avoid making up a citation.
+Paraphrase rather than quoting long passages; keep the tone clear, didactic, and practical.
 End with a short concluding sentence.
 """
 

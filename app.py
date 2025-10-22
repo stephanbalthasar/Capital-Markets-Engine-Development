@@ -608,12 +608,12 @@ def split_into_paragraphs(text: str) -> list[str]:
         out.append(" ".join(cur))
     return out
 
-# Paragraph markers: para. 115 / Rn. 115 / [115] / (115)
+# Paragraph markers: para. 115 / paragraph 115 / Rn. 115 / [115] / (115)
 _para_patterns = [
-    re.compile(r"\bpara(?:graph)?\.?\s*(\d{1,4})\b", re.I),
-    re.compile(r"\bRn\.?\s*(\d{1,4})\b", re.I),
-    re.compile(r"\[(\d{1,4})\]"),
-    re.compile(r"\((\d{1,4})\)")
+    re.compile(r"\bpara(?:graph)?\.?\s*(\d{1,4})\b", re.I),  # para. 115 / paragraph 115
+    re.compile(r"\brn\.?\s*(\d{1,4})\b", re.I),              # Rn. 115
+    re.compile(r"\[\s*(\d{1,4})\s*\]"),                      # [115]
+    re.compile(r"\(\s*(\d{1,4})\s*\)"),                      # (115)
 ]
 
 # Case markers: "Case 14" or "Fall 14"
@@ -622,13 +622,22 @@ _case_pattern = re.compile(r"\b(?:Case|Fall)\s*(\d{1,4})\b", re.I)
 def detect_para_numbers(text: str) -> list[int]:
     nums = []
     for pat in _para_patterns:
-        nums += pat.findall(text)
-    # unique preserve order, cast to int
+        matches = pat.findall(text)  # e.g., ['115'] or possibly tuples if patterns ever change
+        for m in matches:
+            # If a pattern produces tuples (multiple groups), pick the first non-empty
+            if isinstance(m, tuple):
+                m = next((g for g in m if g), "")
+            # Keep only pure digits
+            if not m or not m.isdigit():
+                continue
+            nums.append(int(m))
+
+    # unique while preserving order
     out = []
-    for x in nums:
-        if x not in out:
-            out.append(x)
-    return [int(x) for x in out]
+    for n in nums:
+        if n not in out:
+            out.append(n)
+    return out
 
 def detect_case_numbers(text: str) -> list[int]:
     nums = _case_pattern.findall(text)

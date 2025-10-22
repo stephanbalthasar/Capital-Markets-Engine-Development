@@ -178,10 +178,6 @@ def filter_model_answer_and_rubric(selected_question: str, model_answer: str, ap
     extracted_issues = extract_issues_from_model_answer(model_answer_filtered, api_key)
     return model_answer_filtered, extracted_issues
 
-# ---- Manual relevance terms per question ----
-def manual_chunk_relevant(text: str, extracted_keywords: list[str]) -> bool:
-    return any(kw.lower() in text.lower() for kw in extracted_keywords)
-
 # ---------------- Robust keyword & citation checks ----------------
 def normalize_ws(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
@@ -354,6 +350,10 @@ def collect_corpus(student_answer: str, extra_user_q: str, max_fetch: int = 20) 
             pg["title"] = pg["title"] or r.get("title") or r["url"]
             fetched.append(pg)
     return fetched
+
+# ---- Manual relevance terms per question ----
+def manual_chunk_relevant(text: str, extracted_keywords: list[str]) -> bool:
+    return any(kw.lower() in text.lower() for kw in extracted_keywords)
 
 def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages: List[Dict], backend,
                                   top_k_pages: int = 8, chunk_words: int = 170):

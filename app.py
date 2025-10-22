@@ -49,6 +49,8 @@ def embed_texts(texts: List[str], backend):
 def cos_sim(a, b):
     return float(cosine_similarity(a.reshape(1, -1), b.reshape(1, -1))[0, 0])
 
+DEFAULT_WEIGHTS = {"similarity": 0.4, "coverage": 0.6}
+
 def split_into_chunks(text: str, max_words: int = 180):
     words = text.split()
     chunks, cur = [], []

@@ -389,10 +389,13 @@ def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages:
 
     # ---- Prepare web chunks (unchanged)
     web_chunks, web_meta = [], []
+    selected_q = st.session_state.get("selected_question", "Question 1")
     for i, p in enumerate(pages):
+        if not web_page_relevant(p.get("text", ""), selected_q):
+            continue
         for ch in split_into_chunks(p["text"], max_words=chunk_words):
             web_chunks.append(ch)
-            web_meta.append((i + 1, p["url"], p["title"]))
+        web_meta.append((i + 1, p["url"], p["title"]))
 
     # ---- Build combined corpus
     all_chunks = manual_chunks + web_chunks
@@ -406,7 +409,7 @@ def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages:
     idx = np.argsort(sims)[::-1]
 
     # ✅ Similarity floor to keep only reasonably relevant snippets
-    MIN_SIM = 0.12  # tune 0.10–0.18 if needed
+    MIN_SIM = 0.18  # tune 0.10–0.18 if needed
 
     # ---- Select top snippets grouped by (manual page) or (web page index)
     per_page = {}
@@ -523,25 +526,21 @@ SOURCES (numbered; cite using [1], [2], … ONLY from this list):
 EXCERPTS (quote sparingly; cite using [1], [2], …):
 {excerpts_block}
 
-TASK:
-Write ≤400 words of actionable feedback.
-Start by stating the correct conclusion if the student's conclusion is wrong (e.g., "In fact, the CFA is inside information under Art 7(1),(2) MAR because …") and support it with precise [n] citations.
-Then:
-- Explain why any incorrect statements are wrong, with citations [n].
-- Add missing points for ALL rubric issues and why they matter (with [n]).
-- Correct mis-citations succinctly (e.g., Art 3(1) PR → Art 3(3) PR).
-- Cover ALL rubric issues for this question, even if the student did not mention them.
-IMPORTANT: Cite ONLY the numbered SOURCES above. Do NOT invent any Course Booklet references (pages, paragraphs, cases). If a point is not supported by these sources, say so and avoid making up a citation.
-Paraphrase rather than quoting long passages. 
-Do not disclose internal materials or say that a hidden model answer exists; rely on the numbered sources and the summary above.
-Do not disclose scorings.
-Paraphrase rather than quoting long passages; keep the tone clear, didactic, and practical.
-Use a clear structure: (1) Correct conclusion, (2) Errors explained, (3) Missing points, (4) Improvement tips.
-End with a short concluding sentence.
+TASK (you MUST follow these steps):
+1) Extract the student's core CLAIMS as short bullets (no more than 3–5 bullets). For EACH claim, label it Correct / Incorrect / Not supported and attach a numeric citation [n] to the specific rule you rely on.
+2) Apply the MAR Q1 EVALUATION PATH irrespective of what the student wrote:
+   • Art. 7(1) MAR: check the four elements (issuer/instrument link, non-public, precise nature, likely significant effect) — cite [n].
+   • Art. 7(2) MAR (“precise nature”): explain the standard and that future events can be precise; you need not know the direction of price movement; only “vague or general” is excluded — cite [n] (ECJ Lafonta).
+   • Art. 17(1) MAR: if inside information, explain the duty to disclose “as soon as possible” — cite [n].
+   • Delay analysis: FIRST test Art. 17(4) MAR (legitimate interest + not misleading + confidentiality). EXPLICITLY state that Art. 17(5) MAR is a special stability provision for credit/financial institutions with competent authority consent; if the issuer is not such an institution, 17(5) does not apply — cite [n].
+3) Give concise IMPROVEMENT TIPS (1–3 bullets) tied to the rubric issues, each with a numeric citation.
+4) End with a single-sentence CONCLUSION.
 
-IMPORTANT: Cite ONLY the numbered SOURCES above. Do NOT invent any Course Booklet references (pages/paras/cases). If a point is not supported by these sources, say so and avoid making up a citation.
-Paraphrase rather than quoting long passages; keep the tone clear, didactic, and practical.
-End with a short concluding sentence.
+RULES:
+- Use numeric citations matching the SOURCES list (e.g., [1], [2]); never “[n]”.
+- Do not invent any Course Booklet page/para/case reference; cite only from SOURCES.
+- Be concrete; avoid tautologies (e.g., “refer to Art 7(1) instead of Art 7(1)”).
+- ≤400 words total.
 """
 
 def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_block: str, excerpts_block: str) -> List[Dict]:
@@ -555,6 +554,12 @@ def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_blo
     return msgs
 
 # ------------------------------ Chat and Feebdack Helpers ----------
+def web_page_relevant(text: str, selected_question: str) -> bool:
+    """Keep a web page only if it hits at least one key term for the active question."""
+    terms = MANUAL_KEY_TERMS.get(selected_question, [])
+    low = (text or "").lower()
+    return any(term.lower() in low for term in terms)
+
 def parse_cited_indices(text: str) -> list[int]:
     """Return sorted unique [n] indices used in text."""
     try:
@@ -613,7 +618,24 @@ def clear_chat_draft():
     # Clear the persistent composer safely during the button's on_click callback
     st.session_state["chat_draft"] = ""
 
-# ---- Course Booklet parsing helpers ----
+# --- Citation post-processing & filtering ---
+def parse_cited_indices(text: str) -> list[int]:
+    """Return sorted unique [n] indices used in text."""
+    try:
+        return sorted(set(int(x) for x in re.findall(r"\[(\d+)\]", text or "")))
+    except Exception:
+        return []
+
+def filter_sources_by_indices(source_lines: list[str], used: list[int]) -> list[str]:
+    """Return only those lines whose [n] was actually cited; preserve numbering."""
+    if not used:
+        return []
+    out = []
+    for n in used:
+        if 1 <= n <= len(source_lines):
+            out.append(source_lines[n - 1])
+    return out
+
 # ---- Course Booklet parsing helpers (fixed) ----
 def split_into_paragraphs(text: str) -> list[str]:
     """Split page text into paragraphs using blank lines; fall back to grouping lines."""
@@ -637,7 +659,7 @@ def split_into_paragraphs(text: str) -> list[str]:
 _para_patterns = [
     re.compile(r"\bpara(?:graph)?\.?\s*(\d{1,4})\b", re.I),
     re.compile(r"\brn\.?\s*(\d{1,4})\b", re.I),
-    re.compile(r"\*\*\s*(\d{1,4})\s*\*\*"),
+    re.compile(r"\*\*\s*(\d{1,4})\s*\*"),
 ]
 
 # Case markers: prefer "Case Study N", also accept "Case N"/"Fall N"
@@ -703,7 +725,7 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
             # Break very long paragraphs roughly to the hint size
             words = para.split()
             if len(words) > chunk_words_hint * 2:
-                parts = re.split(r"(?<=[\.\?\!…])\s+", para)  # split on whitespace after ., ?, !, …
+                parts = re.split(r"(?<=[\.\?\!…])\s+", para)
                 cur, cur_words = [], 0
                 for s in parts:
                     cur.append(s)
@@ -995,12 +1017,15 @@ with colA:
             
                 reply = generate_with_continuation(messages, api_key, model_name=model_name, temperature=temp,
                                    first_tokens=1200, continue_tokens=350)
-                
+
                 if reply:
+                    # Safety net: strip any stray “[n]” placeholders
                     reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
+                    st.write(reply)
+
+                    # Show only the sources actually cited in the narrative:
                     used_idxs = parse_cited_indices(reply)
                     display_source_lines = filter_sources_by_indices(source_lines, used_idxs) or source_lines
-                    st.write(reply)
                 else:
                     st.info("LLM unavailable. See corrections above and the issue breakdown.")
             else:
@@ -1008,7 +1033,7 @@ with colA:
 
             if source_lines:
                 with st.expander("📚 Sources used"):
-                    for line in source_lines:
+                    for line in display_source_lines:
                         st.markdown(f"- {line}")
 
 with colB:
@@ -1084,18 +1109,19 @@ with colB:
                     + "\n\nIn doubt, follow the model answer."
                 )
         # ---- SAFETY NET (CHAT): normalize citations + show only cited sources ----
-        # Convert any stray placeholder “[n]” to nothing (prevents literal “[n]” in the chat)
+        # Safety net: remove literal “[n]”
         reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
+        
+        # Keep only sources actually cited in this reply
         used_idxs = parse_cited_indices(reply)
         msg_sources = filter_sources_by_indices(source_lines, used_idxs) or source_lines[:]
-        
-        # Append the assistant message WITH its per-message (filtered) sources
+
         st.session_state.chat_history.append({
             "role": "assistant",
             "content": reply,
             "sources": msg_sources
         })
-        
+                
     # --- render FULL history AFTER updates so latest sources appear immediately ---
     for msg in st.session_state.chat_history:
         role = msg.get("role", "")

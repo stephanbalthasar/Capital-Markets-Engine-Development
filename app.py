@@ -985,7 +985,7 @@ with colA:
                 extracted_keywords = [kw for issue in extracted_issues for kw in issue.get("keywords", [])]
                 rubric = generate_rubric_from_model_answer(
                     student_answer,
-                    MODEL_ANSWER,
+                    model_answer_filtered,
                     backend,
                     api_key,
                     DEFAULT_WEIGHTS

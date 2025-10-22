@@ -95,54 +95,73 @@ c)  Failure to disclose under § 33 WpHG/§ 35 WpÜG will suspend Unicorn’s sh
 """
 
 # ---------------- Scoring Rubric ----------------
-REQUIRED_ISSUES = [
-    {
-        "name": "Inside information & timing (Art 7(1),(2),(4) MAR); disclosure & delay (Art 17 MAR; Lafonta)",
-        "points": 26,
-        "keywords": ["art 7", "inside information", "precise nature", "intermediate step", "protracted process", "lafonta", "art 17", "as soon as possible", "delay", "mislead"],
-    },
-    {
-        "name": "Prospectus requirement on admission (PR 2017/1129: Art 3(3); exemption Art 1(5)(a) ≤20%; approval Art 20; publication Art 21; MiFID II 4(1)(44))",
-        "points": 18,
-        "keywords": ["prospectus regulation", "art 3(3)", "admission to trading", "art 1(5)(a)", "20%", "article 20", "article 21", "mifid ii", "4(1)(44)"],
-    },
-    {
-        "name": "Prospectus content & risk factors (PR Art 6(1) materiality; reasons 6(1)(c); risk factors Art 16(1))",
-        "points": 12,
-        "keywords": ["article 6(1)", "material information", "reasons for the issue", "article 16(1)", "risk factors"],
-    },
-    {
-        "name": "Shareholding notifications (WpHG §§ 33, 34(2); acting in concert; §43 statement of intent; §44 sanctions)",
-        "points": 18,
-        "keywords": ["§ 33 wphg", "§ 34 wphg", "acting in concert", "gemeinschaftliches handeln", "§ 43 wphg", "§ 44 wphg"],
-    },
-    {
-        "name": "Takeover law (WpÜG §§ 29(2), 30(2) control; §35 mandatory offer/disclosure; §59 suspension of rights)",
-        "points": 16,
-        "keywords": ["§ 29 wpüg", "§ 30 wpüg", "§ 35 wpüg", "mandatory offer", "control 30%", "§ 59 wpüg"],
-    },
-    {
-        "name": "Clarification: subscription doesn’t trigger §38/33(3) WpHG for Neon; only Unicorn",
-        "points": 10,
-        "keywords": ["§ 38 wphg", "§ 33(3) wphg", "subscription", "neon", "unicorn"],
-    },
-]
-DEFAULT_WEIGHTS = {"similarity": 0.4, "coverage": 0.6}
+import json
 
-QUESTION_MAP = {
-    "Question 1": [
-        "Inside information & timing (Art 7(1),(2),(4) MAR); disclosure & delay (Art 17 MAR; Lafonta)",
-        "Clarification: subscription doesn’t trigger §38/33(3) WpHG for Neon; only Unicorn"
-    ],
-    "Question 2": [
-        "Prospectus requirement on admission (PR 2017/1129: Art 3(3); exemption Art 1(5)(a) ≤20%; approval Art 20; publication Art 21; MiFID II 4(1)(44))",
-        "Prospectus content & risk factors (PR Art 6(1) materiality; reasons 6(1)(c); risk factors Art 16(1))"
-    ],
-    "Question 3": [
-        "Shareholding notifications (WpHG §§ 33, 34(2); acting in concert; §43 statement of intent; §44 sanctions)",
-        "Takeover law (WpÜG §§ 29(2), 30(2) control; §35 mandatory offer/disclosure; §59 suspension of rights)"
-    ]
-}
+def extract_issues_from_model_answer(model_answer: str, llm_api_key: str) -> list[dict]:
+    prompt = f"""
+    Extract a list of key legal issues from the following model answer. For each issue, include:
+    - A short name
+    - 3–6 keywords or phrases that indicate coverage
+    - An importance score (1–10)
+
+    MODEL ANSWER:
+    \"\"\"{model_answer}\"\"\"
+    """
+    response = call_groq([{"role": "user", "content": prompt}], api_key=llm_api_key)
+    try:
+        return json.loads(response)
+    except Exception:
+        return []
+
+def generate_rubric_from_model_answer(student_answer: str, model_answer: str, backend, llm_api_key: str, weights: dict) -> dict:
+    extracted_issues = extract_issues_from_model_answer(model_answer, llm_api_key)
+    if not extracted_issues:
+        return {
+            "similarity_pct": 0.0,
+            "coverage_pct": 0.0,
+            "final_score": 0.0,
+            "per_issue": [],
+            "missing": [],
+            "substantive_flags": []
+        }
+
+    embs = embed_texts([student_answer, model_answer], backend)
+    sim = cos_sim(embs[0], embs[1])
+    sim_pct = max(0.0, min(100.0, 100.0 * (sim + 1) / 2))
+
+    per_issue, tot, got = [], 0, 0
+    for issue in extracted_issues:
+        pts = issue.get("importance", 5) * 2
+        tot += pts
+        sc, hits = coverage_score(student_answer, {"keywords": issue["keywords"], "points": pts})
+        got += sc
+        per_issue.append({
+            "issue": issue["name"],
+            "max_points": pts,
+            "score": sc,
+            "keywords_hit": hits,
+            "keywords_total": issue["keywords"],
+        })
+
+    cov_pct = 100.0 * got / max(1, tot)
+    final = (weights["similarity"] * sim_pct + weights["coverage"] * cov_pct) / (weights["similarity"] + weights["coverage"])
+
+    missing = []
+    for row in per_issue:
+        missed = [kw for kw in row["keywords_total"] if kw not in row["keywords_hit"]]
+        if missed:
+            missing.append({"issue": row["issue"], "missed_keywords": missed})
+
+    substantive_flags = detect_substantive_flags(student_answer)
+
+    return {
+        "similarity_pct": round(sim_pct, 1),
+        "coverage_pct": round(cov_pct, 1),
+        "final_score": round(final, 1),
+        "per_issue": per_issue,
+        "missing": missing,
+        "substantive_flags": substantive_flags
+    }
 
 def filter_model_answer_and_rubric(selected_question):
     if selected_question == "Question 1":
@@ -157,30 +176,8 @@ def filter_model_answer_and_rubric(selected_question):
     return model_answer_filtered, selected_issues
 
 # ---- Manual relevance terms per question ----
-MANUAL_KEY_TERMS = {
-    "Question 1": [
-        "MAR", "Art 7", "Article 7", "Art 17",
-        "inside information", "Insiderinformation",
-        "precise nature", "intermediate step", "protracted process",
-        "delay", "Verzögerung", "mislead", "irreführung"
-    ],
-    "Question 2": [
-        "Prospectus Regulation", "2017/1129",
-        "Art 3(3)", "Article 3(3)", "admission to trading",
-        "Art 1(5)(a)", "Article 1(5)(a)", "20%", "secondary issuance",
-        "MiFID", "4(1)(44)", "transferable securities", "Prospekt"
-    ],
-    "Question 3": [
-        "WpHG", "§ 33", "§ 34", "acting in concert", "gemeinschaftliches Handeln",
-        "WpÜG", "§ 29", "§ 30", "§ 35", "§ 59", "Pflichtangebot", "Kontrolle", "30%"
-    ]
-}
-
-def manual_chunk_relevant(text: str, selected_question: str) -> bool:
-    """Return True if the manual chunk contains any key term for the active question."""
-    terms = MANUAL_KEY_TERMS.get(selected_question, [])
-    low = text.lower()
-    return any(term.lower() in low for term in terms)
+def manual_chunk_relevant(text: str, extracted_keywords: list[str]) -> bool:
+    return any(kw.lower() in text.lower() for kw in extracted_keywords)
 
 # ---------------- Robust keyword & citation checks ----------------
 def normalize_ws(s: str) -> str:
@@ -371,7 +368,7 @@ def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages:
     selected_q = st.session_state.get("selected_question", "Question 1")
     filtered_chunks, filtered_metas = [], []
     for ch, m in zip(manual_chunks, manual_metas):
-        if manual_chunk_relevant(ch, selected_q):
+        if manual_chunk_relevant(chunk, extracted_keywords):
             filtered_chunks.append(ch)
             filtered_metas.append(m)
 
@@ -396,7 +393,7 @@ def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages:
         if not text:
             continue
     # Optional relevance filter (keep if you added MANUAL_KEY_TERMS):
-        if 'web_page_relevant' in globals() and not web_page_relevant(text, selected_q):
+        if 'web_page_relevant' in globals() and not web_page_relevant(text, extracted_keywords):
             continue
 
         chunks_i = split_into_chunks(text, max_words=chunk_words)
@@ -566,11 +563,8 @@ def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_blo
     return msgs
 
 # ------------------------------ Chat and Feebdack Helpers ----------
-def web_page_relevant(text: str, selected_question: str) -> bool:
-    """Keep a web page only if it hits at least one key term for the active question."""
-    terms = MANUAL_KEY_TERMS.get(selected_question, [])
-    low = (text or "").lower()
-    return any(term.lower() in low for term in terms)
+def web_page_relevant(text: str, extracted_keywords: list[str]) -> bool:
+    return any(kw.lower() in text.lower() for kw in extracted_keywords)
 
 def parse_cited_indices(text: str) -> list[int]:
     """Return sorted unique [n] indices used in text."""
@@ -986,9 +980,15 @@ with colA:
         else:
             with st.spinner("Scoring and collecting sources..."):
                 backend = load_embedder()
-                model_answer_filtered, rubric_issues = filter_model_answer_and_rubric(selected_question)
-                rubric = summarize_rubric(student_answer, model_answer_filtered, backend, rubric_issues, DEFAULT_WEIGHTS)
-                
+                model_answer_filtered, extracted_issues = filter_model_answer_and_rubric(selected_question, MODEL_ANSWER, api_key)
+                rubric = generate_rubric_from_model_answer(
+                    student_answer,
+                    MODEL_ANSWER,
+                    backend,
+                    api_key,
+                    DEFAULT_WEIGHTS
+                )
+                                
                 top_pages, source_lines = [], []
                 if enable_web:
                     pages = collect_corpus(student_answer, "", max_fetch=22)

@@ -723,39 +723,36 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
 
 def format_manual_citation(meta: dict) -> str:
     """
-    Build a human-friendly citation like:
-      'Course Booklet — p. ii (PDF p. 4), Case Study 14; para. 115'
-      or, if only one is available: '..., Case Study 14'  or  '..., para. 115'
+    Manual citation for the Sources list:
+    'Course Booklet — Case Study 14, para. 115'
+    or (if only one is detected): 'Course Booklet — para. 115'  / 'Course Booklet — Case Study 14'
+    Falls back to 'Course Booklet — (no paragraph number detected)' if nothing is found.
     """
-    lbl = meta.get("page_label")
-    pdfp = meta.get("page_num")
     paras = meta.get("paras") or []
     cases = meta.get("cases") or []
 
-    parts = [f"Course Booklet — p. {lbl} (PDF p. {pdfp})"]
+    # Normalize, keep at most a short range for readability
+    xs = sorted({int(p) for p in paras if isinstance(p, (int, str)) and str(p).isdigit()})
+    if len(xs) >= 2 and xs[1] == xs[0] + 1:
+        para_anchor = f"paras {xs[0]}–{xs[1]}"
+    elif xs:
+        para_anchor = f"para. {xs[0]}"
+    else:
+        para_anchor = ""
 
-    # Collect anchors (we show both if both are present)
+    parts = ["Course Booklet"]
     anchors = []
-
-    # Prefer to show one explicit Case Study number if available
     if cases:
         anchors.append(f"Case Study {cases[0]}")
-
-    # Add a concise paragraph anchor if available
-    if paras:
-        # De-duplicate and sort once, then pick the most helpful concise form
-        xs = sorted(set(int(p) for p in paras if isinstance(p, (int, str)) and str(p).isdigit()))
-        if xs:
-            # If we have at least two and they are consecutive, show a short range; else show the first one
-            if len(xs) >= 2 and xs[1] == xs[0] + 1:
-                anchors.append(f"paras {xs[0]}–{xs[1]}")
-            else:
-                anchors.append(f"para. {xs[0]}")
+    if para_anchor:
+        anchors.append(para_anchor)
 
     if anchors:
-        parts.append("; ".join(anchors))
+        parts.append(" — " + ", ".join(anchors))
+    else:
+        parts.append(" — (no paragraph number detected)")
 
-    return ", ".join(parts)
+    return "".join(parts)
 
 # ---- Simple page cleaner for booklet parsing ----
 def clean_page_text(t: str) -> str:

@@ -845,6 +845,7 @@ with st.sidebar:
             st.code((r.text or "")[:1000], language="json")
         except Exception as e:
             st.exception(e)
+    
     # ---- Course Booklet diagnostics ----
     st.subheader("Course Booklet diagnostics")
     if st.checkbox("Preview parsed booklet (first 6 pages)"):
@@ -854,7 +855,7 @@ with st.sidebar:
             for ch, m in zip(chunks, metas):
                 by_page.setdefault(m["page_label"], []).append((ch[:140] + ("…" if len(ch) > 140 else ""), m))
             for i, (lbl, arr) in enumerate(list(by_page.items())[:6], start=1):
-                st.markdown(f"**Page label {lbl}** (PDF p. {arr[0][1]['page']})")
+                st.markdown(f"**Page label {lbl}** (PDF p. {arr[0][1]['page_num']})")
                 for snip, meta in arr[:2]:  # show 2 snippets per page
                     st.write("•", snip)
                     st.caption(f"Cases: {meta['cases'] or '—'} | Paras: {meta['paras'] or '—'}")

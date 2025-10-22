@@ -660,8 +660,8 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
             # Break very long paragraphs roughly to the hint size
             words = para.split()
             if len(words) > chunk_words_hint * 2:
-                - parts = re.split(r"\(?\<=\[\\.\?\\\!\\]\)\s+", para)  # <-- fixed sentence splitter
-                + parts = re.split(r"(?<=[\.\?\!…])\s+", para)  # split on whitespace after ., ?, !, …
+                parts = re.split(r"\(?\<=\[\\.\?\\\!\\]\)\s+", para)  # <-- fixed sentence splitter
+                parts = re.split(r"(?<=[\.\?\!…])\s+", para)  # split on whitespace after ., ?, !, …
                 cur, cur_words = [], 0
                 for s in parts:
                     cur.append(s)

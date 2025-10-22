@@ -166,15 +166,26 @@ def generate_rubric_from_model_answer(student_answer: str, model_answer: str, ba
     }
 
 def filter_model_answer_and_rubric(selected_question: str, model_answer: str, api_key: str) -> tuple[str, list[dict]]:
-    if selected_question == "Question 1":
-        model_answer_filtered = model_answer.split("2.")[0].strip()
-    elif selected_question == "Question 2":
-        model_answer_filtered = model_answer.split("2.")[1].split("3.")[0].strip()
-    elif selected_question == "Question 3":
-        model_answer_filtered = model_answer.split("3.")[1].strip()
-    else:
-        model_answer_filtered = model_answer
+    # Find section starts anchored at line-beginnings
+    m1 = re.search(r"(?m)^\s*1\.\s", model_answer)
+    m2 = re.search(r"(?m)^\s*2\.\s", model_answer)
+    m3 = re.search(r"(?m)^\s*3\.\s", model_answer)
 
+    start1 = m1.start() if m1 else 0
+    start2 = m2.start() if m2 else None
+    start3 = m3.start() if m3 else None
+    end = len(model_answer)
+
+    if selected_question == "Question 1":
+        lo, hi = start1, (start2 if start2 is not None else end)
+    elif selected_question == "Question 2":
+        lo, hi = (start2 if start2 is not None else 0), (start3 if start3 is not None else end)
+    elif selected_question == "Question 3":
+        lo, hi = (start3 if start3 is not None else 0), end
+    else:
+        lo, hi = 0, end
+
+    model_answer_filtered = model_answer[lo:hi].strip()
     extracted_issues = extract_issues_from_model_answer(model_answer_filtered, api_key)
     return model_answer_filtered, extracted_issues
     

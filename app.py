@@ -163,17 +163,18 @@ def generate_rubric_from_model_answer(student_answer: str, model_answer: str, ba
         "substantive_flags": substantive_flags
     }
 
-def filter_model_answer_and_rubric(selected_question):
+def filter_model_answer_and_rubric(selected_question: str, model_answer: str, api_key: str) -> tuple[str, list[dict]]:
     if selected_question == "Question 1":
-        model_answer_filtered = MODEL_ANSWER.split("2.")[0].strip()
+        model_answer_filtered = model_answer.split("2.")[0].strip()
     elif selected_question == "Question 2":
-        model_answer_filtered = MODEL_ANSWER.split("2.")[1].split("3.")[0].strip()
+        model_answer_filtered = model_answer.split("2.")[1].split("3.")[0].strip()
     elif selected_question == "Question 3":
-        model_answer_filtered = MODEL_ANSWER.split("3.")[1].strip()
+        model_answer_filtered = model_answer.split("3.")[1].strip()
     else:
-        model_answer_filtered = MODEL_ANSWER
-    selected_issues = [issue for issue in REQUIRED_ISSUES if issue["name"] in QUESTION_MAP[selected_question]]
-    return model_answer_filtered, selected_issues
+        model_answer_filtered = model_answer
+
+    extracted_issues = extract_issues_from_model_answer(model_answer_filtered, api_key)
+    return model_answer_filtered, extracted_issues
 
 # ---- Manual relevance terms per question ----
 def manual_chunk_relevant(text: str, extracted_keywords: list[str]) -> bool:

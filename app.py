@@ -1088,5 +1088,5 @@ with colB:
 st.divider()
 st.markdown(
     "ℹ️ **Notes**: This app is authored by Stephan Balthasar. It provides feedback based on artificial intelligence and large language models, and as a result, answers can be inaccurate." 
-    "Students are advised to use caution when using the feedback enginge and chat functions."
+    "Students are advised to use caution when using the feedback engine and chat functions."
 )

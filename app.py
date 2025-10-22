@@ -540,7 +540,6 @@ EXCERPTS (quote sparingly; cite using [1], [2], …):
 {excerpts_block}
 
 TASK (you MUST follow these steps):
-If a student answer is clearly irrelevant, ask the student to check whether he selected the right question from the menu. Otherwise, follow these steps:
 1) Extract the student's core CLAIMS as short bullets (no more than 3–5 bullets). For EACH claim, label it Correct / Incorrect / Not supported and if relevant, attach a numeric citation [n] to the specific rule you rely on.
 2) Where you label a student core claim as incorrect, explain briefly why.
 3) Where important aspects are missing, explain what aspects are missing, and why they are important. 

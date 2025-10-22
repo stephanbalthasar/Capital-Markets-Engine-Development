@@ -99,21 +99,220 @@ c)  Failure to disclose under § 33 WpHG/§ 35 WpÜG will suspend Unicorn’s sh
 # ---------------- Scoring Rubric ----------------
 import json
 
-def extract_issues_from_model_answer(model_answer: str, llm_api_key: str) -> list[dict]:
-    prompt = f"""
-    Extract a list of key legal issues from the following model answer. For each issue, include:
-    - A short name
-    - 3–6 keywords or phrases that indicate coverage
-    - An importance score (1–10)
+# ---------- Helpers for robust JSON extraction ----------
+def _first_json_block(s: str):
+    """Extract the first JSON object/array from a string (handles ```json ... ```)."""
+    if not s:
+        return None
+    m = re.search(r"```json\s*(\{.*?\}|\[.*?\])\s*```", s, flags=re.S | re.I)
+    if m:
+        return m.group(1)
+    m = re.search(r"(\{.*?\}|\[.*?\])", s, flags=re.S)
+    return m.group(1) if m else None
 
-    MODEL ANSWER:
-    \"\"\"{model_answer}\"\"\"
-    """
-    response = call_groq([{"role": "user", "content": prompt}], api_key=llm_api_key)
-    try:
-        return json.loads(response)
-    except Exception:
+def _coerce_issues(parsed) -> list[dict]:
+    """Validate & normalize issues into [{name, keywords, importance}] with sane bounds."""
+    if parsed is None:
         return []
+    issues = parsed.get("issues") if isinstance(parsed, dict) else parsed
+    if not isinstance(issues, list):
+        return []
+    out = []
+    for it in issues:
+        if not isinstance(it, dict):
+            continue
+        name = (it.get("name") or "").strip()
+        kws  = it.get("keywords") or []
+        try:
+            importance = int(it.get("importance", 5))
+        except Exception:
+            importance = 5
+        if not name or not isinstance(kws, list):
+            continue
+        kws = [k.strip() for k in kws if isinstance(k, str) and k.strip()]
+        kws = list(dict.fromkeys(kws))[:8]           # dedupe + cap
+        importance = max(1, min(10, importance))     # clamp
+        if not kws:
+            continue
+        out.append({"name": name, "keywords": kws, "importance": importance})
+    # keep 4–10 issues if possible
+    return out[:10]
+
+def _try_parse_json(raw: str):
+    """Parse JSON from raw LLM output, being tolerant to fences."""
+    if not raw:
+        return None
+    block = _first_json_block(raw)
+    try:
+        if block:
+            return json.loads(block)
+        return json.loads(raw)
+    except Exception:
+        return None
+
+# ---------- Purely algorithmic fallback (scales to any case) ----------
+def _auto_issues_from_text(text: str, max_issues: int = 8) -> list[dict]:
+    """
+    Build issues from the MODEL_ANSWER only (no LLM, no hard-coded topics):
+      1) Split into sentences.
+      2) TF-IDF over uni/bi/tri-grams → top phrases.
+      3) Light boost for law-like references (Art/§/C‑number/etc.).
+      4) For each phrase, derive 3–6 keywords from its best-matching sentences.
+      5) Importance decays with rank (top gets 10).
+    """
+    clean = (text or "").strip()
+    if not clean:
+        return []
+
+    # Sentences (simple heuristic)
+    sents = [s.strip() for s in re.split(r"(?<=[\.\!\?])\s+", clean) if s.strip()]
+    if not sents:
+        sents = [clean]
+
+    # TF-IDF over n-grams
+    stop = set([
+        "the","a","an","and","or","of","to","for","in","on","by","with","without",
+        "be","is","are","was","were","as","that","this","those","these","it","its",
+        "students","should","would","could","also","however","therefore","pursuant",
+        "within","meaning","includes","including"
+    ])
+    vec = TfidfVectorizer(
+        ngram_range=(1,3),
+        max_features=3000,
+        stop_words="english"  # keep generic; we already added a few extra above
+    )
+    X = vec.fit_transform(sents)   # shape: [n_sents, n_terms]
+    terms = np.array(vec.get_feature_names_out())
+
+    # Aggregate importance per term across sentences (sum TF-IDF)
+    tfidf_sum = np.asarray(X.sum(axis=0)).ravel()
+
+    # Light domain-agnostic boosts for law-like patterns (generic & scalable)
+    def _boost_for(term: str) -> float:
+        t = term.lower()
+        boost = 1.0
+        if re.search(r"\b(?:art|article)\s*\d", t): boost *= 1.35
+        if "§" in term or re.search(r"\b§\s*\d", term): boost *= 1.35
+        if re.search(r"\b(?:regulation|directive|mifid|mar|td|wpüg|wphg|pr)\b", t): boost *= 1.2
+        if re.search(r"\bC[\u2011\u2010\u202F\u00A0\-–—]?\d+\/\d+\b", term, re.I): boost *= 1.25  # C‑123/45
+        if re.search(r"\bprospectus\b|\binside information\b|\bacting in concert\b", t): boost *= 1.1
+        return boost
+
+    scores = np.array([tfidf_sum[i] * _boost_for(terms[i]) for i in range(len(terms))])
+
+    # Pick top n distinct phrases, prefer longer n-grams, avoid nested duplicates
+    idx = scores.argsort()[::-1]
+    chosen = []
+    seen = set()
+    for i in idx:
+        phrase = terms[i]
+        # discard trivial tokens
+        if len(phrase) < 3 or phrase.lower() in stop:
+            continue
+        # avoid keeping a phrase fully contained in an already chosen longer phrase
+        if any(phrase in c or c in phrase for c in seen):
+            continue
+        seen.add(phrase)
+        chosen.append((phrase, scores[i]))
+        if len(chosen) >= max_issues:
+            break
+
+    # Map term → sentences it appears in
+    term2sent_ix = {t: [] for t, _ in chosen}
+    for si, s in enumerate(sents):
+        low = s.lower()
+        for t, _ in chosen:
+            if t.lower() in low:
+                term2sent_ix[t].append(si)
+
+    def _keywords_from_sentences(term: str, sent_ix: list[int]) -> list[str]:
+        # Collect top co-occurring tokens from the best 2 sentences
+        sent_ix = (sent_ix or [])[:2]
+        bag = []
+        for si in sent_ix:
+            bag.extend(re.findall(r"[A-Za-z§][A-Za-z0-9()§.\-\/]*", sents[si]))
+        # simple normalisation
+        bag = [w.strip(".,;:()").lower() for w in bag]
+        bag = [w for w in bag if len(w) >= 3 and w not in stop]
+        # keep some legal markers intact
+        # Rank by frequency
+        freqs = {}
+        for w in bag:
+            freqs[w] = freqs.get(w, 0) + 1
+        # seed with the term itself (split into tokens)
+        seeds = [term.lower()]
+        # choose top 3–6 keywords
+        ordered = sorted(freqs.items(), key=lambda kv: (-kv[1], -len(kv[0])))
+        kws = []
+        for w, _ in ordered:
+            if w not in seeds and w not in kws:
+                kws.append(w)
+            if len(kws) >= 5:
+                break
+        # Ensure the term itself (and a title-cased variant) are present
+        base = term.strip()
+        kws = [base] + kws
+        # Unique + cap length
+        out = []
+        for k in kws:
+            if k and k not in out:
+                out.append(k)
+        return out[:6] if len(out) >= 3 else out  # keep 3–6 if possible
+
+    issues = []
+    for rank, (term, sc) in enumerate(chosen, start=1):
+        # Name: title-case lightly but keep 'Art'/§ style intact
+        name = re.sub(r"\b(article|art)\b", "Art", term, flags=re.I)
+        name = name.replace("§", "§ ").replace("  ", " ").strip()
+        name = name[:1].upper() + name[1:]
+        kws = _keywords_from_sentences(term, term2sent_ix.get(term, []))
+        # Importance: simple decay from top (10..max(4,10-(n-1)))
+        importance = max(4, 11 - rank)
+        issues.append({"name": name, "keywords": kws, "importance": importance})
+
+    return issues
+# ---------- Main extractor (no hard-coded topics) ----------
+def extract_issues_from_model_answer(model_answer: str, llm_api_key: str) -> list[dict]:
+    """
+    Try LLM with strict JSON contract (with two repair retries).
+    If it still fails, fall back to automatic text mining (no hard-coded issues).
+    """
+    # Guard
+    model_answer = (model_answer or "").strip()
+    if not model_answer:
+        return []
+
+    # 1) LLM attempt with strict JSON instructions
+    sys = "Respond with VALID JSON only: either an array or {\"issues\": [...]}. No prose, no fences."
+    user = (
+        "Extract the key issues from the MODEL ANSWER.\n"
+        "Return JSON ONLY (no code fences). Each item:\n"
+        "{ \"name\": \"short issue name\", \"keywords\": [\"3-8 indicative phrases\"], \"importance\": 1-10 }\n\n"
+        "MODEL ANSWER:\n" + model_answer
+    )
+    messages = [
+        {"role": "system", "content": sys},
+        {"role": "user", "content": user},
+    ]
+    raw = call_groq(messages, api_key=llm_api_key, model_name="llama-3.1-8b-instant", temperature=0.0, max_tokens=900)
+    parsed = _try_parse_json(raw)
+    issues = _coerce_issues(parsed)
+
+    # 2) If parsing failed or no items, try a small JSON-repair step once
+    if not issues and raw:
+        repair_msgs = [
+            {"role": "system", "content": "Fix JSON. Output VALID JSON only (no prose, no fences)."},
+            {"role": "user", "content": f"Make this into valid JSON array (or {{\"issues\": [...]}}):\n{raw}"},
+        ]
+        raw2 = call_groq(repair_msgs, api_key=llm_api_key, model_name="llama-3.1-8b-instant", temperature=0.0, max_tokens=900)
+        parsed2 = _try_parse_json(raw2)
+        issues = _coerce_issues(parsed2)
+
+    # 3) Final fallback: automatic issue mining from text (generic & scalable)
+    if not issues:
+        issues = _auto_issues_from_text(model_answer, max_issues=8)
+
+    return issues
 
 def generate_rubric_from_model_answer(student_answer: str, model_answer: str, backend, llm_api_key: str, weights: dict) -> dict:
     extracted_issues = extract_issues_from_model_answer(model_answer, llm_api_key)
@@ -903,7 +1102,7 @@ if not st.session_state.authenticated:
 
     if pin_input == correct_pin:
         st.session_state.authenticated = True
-        st.success("PIN accepted. By clicking CONTINUE below you accept that this tool uses artificial intelligence and large language models, and that accordingly, answers may not be accurate.")
+        st.success("PIN accepted. By clicking CONTINUE below you accept that this tool uses artificial intelligence and large language models, and that accordingly, answers may not be accurate. No liability is accepted for use of this tool.")
         if st.button("Continue"):
             st.experimental_rerun()
     elif pin_input:

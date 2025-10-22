@@ -177,6 +177,7 @@ def filter_model_answer_and_rubric(selected_question: str, model_answer: str, ap
 
     extracted_issues = extract_issues_from_model_answer(model_answer_filtered, api_key)
     return model_answer_filtered, extracted_issues
+    extracted_keywords = [kw for issue in extracted_issues for kw in issue.get("keywords", [])]
 
 # ---------------- Robust keyword & citation checks ----------------
 def normalize_ws(s: str) -> str:
@@ -355,8 +356,9 @@ def collect_corpus(student_answer: str, extra_user_q: str, max_fetch: int = 20) 
 def manual_chunk_relevant(text: str, extracted_keywords: list[str]) -> bool:
     return any(kw.lower() in text.lower() for kw in extracted_keywords)
 
-def retrieve_snippets_with_manual(student_answer: str, model_answer: str, pages: List[Dict], backend,
-                                  top_k_pages: int = 8, chunk_words: int = 170):
+def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend, top_k_pages=5, chunk_words=170, extracted_keywords=None):
+
+                                      
     # ---- Load & chunk Course Booklet with page/para/case metadata
     manual_chunks, manual_metas = [], []
     try:

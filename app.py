@@ -1273,7 +1273,7 @@ with colB:
     c1, c2, c3, c4 = st.columns([6, 1, 1, 2])
     with c1:
         st.text_area(
-            "You can use this chat to ask for help with creating an answer, follow-up questions on feedback given by this app, and discuss cases from the course booklet.",
+            "You can use this chat to ask for help with creating an answer, follow-up questions on feedback given by this app, etc.",
             key="chat_draft",
             height=90
         )

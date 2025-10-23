@@ -1262,8 +1262,7 @@ with colA:
 
 with colB:
     st.markdown("### 💬 Tutor Chat: Ask me anything!")
-    st.caption("You can use this chat to ask for help with creating an answer, follow-up questions on feedback given by this app, and discuss cases from the course booklet.")
-
+    
     # --- state ---
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
@@ -1274,7 +1273,7 @@ with colB:
     c1, c2, c3, c4 = st.columns([6, 1, 1, 2])
     with c1:
         st.text_area(
-            "Ask a question about your feedback, the law, or how to improve…",
+            "You can use this chat to ask for help with creating an answer, follow-up questions on feedback given by this app, and discuss cases from the course booklet.",
             key="chat_draft",
             height=90
         )

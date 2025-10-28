@@ -14,6 +14,7 @@ from typing import List, Dict, Tuple
 from urllib.parse import quote_plus, urlparse
 import numpy as np
 import streamlit as st
+import statistics as stats
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.feature_extraction.text import TfidfVectorizer
 
@@ -857,6 +858,7 @@ def split_into_paragraphs(text: str) -> list[str]:
     return out
 
 # Paragraph markers may appear as "para. 115", "paragraph 115", "Rn. 115", "[115]", "¶ 115"
+
 _para_patterns = [
     re.compile(r"\bpara(?:graph)?\.?\s*(\d{1,4})\b", re.I),
     re.compile(r"\brn\.?\s*(\d{1,4})\b", re.I),
@@ -864,12 +866,11 @@ _para_patterns = [
     re.compile(r"¶\s*(\d{1,4})"),
 ]
 
-# Case markers: title/header or inline mention
+# Case markers: must have the word "Case", "Case Study"
 _case_patterns = [
     re.compile(r"\bCase\s*Study\s*(\d{1,4})\b", re.I),
     re.compile(r"\bCase\s*(\d{1,4})\b", re.I),
-    re.compile(r"\bFall\s*(\d{1,4})\b", re.I),
-]
+    ]
 
 def detect_para_numbers(text: str) -> list[int]:
     nums = []
@@ -894,17 +895,19 @@ def detect_para_numbers(text: str) -> list[int]:
 def detect_case_numbers(text: str) -> list[int]:
     nums = []
     for pat in _case_patterns:
-        nums += pat.findall(text)
+        nums += pat.findall(text or "")
     out = []
     for x in nums:
-        if x not in out:
-            out.append(x)
-    return [int(x) for x in out]
+        n = int(x)
+        if n not in out:
+            out.append(n)
+    return out
 
 @st.cache_resource(show_spinner=False)
 def _scan_case_headers(pdf_path: str) -> dict[int, tuple[int, int]]:
     """
     Returns {case_number: (start_page_index, end_page_index)} by scanning page headers/titles.
+    Relies on strict 'Case/Case Study/Fall' matching to avoid picking up para numbers.
     """
     out = {}
     try:
@@ -925,10 +928,102 @@ def _scan_case_headers(pdf_path: str) -> dict[int, tuple[int, int]]:
     doc.close()
     return {k: (v[0], v[1]) for k, v in out.items()}
 
+def _median_or_default(xs, default=12.0):
+    xs = [x for x in xs if isinstance(x, (int, float))]
+    return stats.median(xs) if xs else default
+
+def _dehyphenate_join(prev: str, curr: str) -> str:
+    """
+    Join two line fragments, removing soft hyphenation like: "disclo-" + "sure" -> "disclosure".
+    Only if prev ends with '-' and curr starts with lowercase letter.
+    """
+    if prev.endswith("-") and curr and curr[:1].islower():
+        return prev[:-1] + curr
+    # otherwise join with space (avoid double spaces)
+    if prev and curr:
+        if prev.endswith((" ", "—", "–")) or curr.startswith((" ", "—", "–")):
+            return prev + curr
+        return prev + " " + curr
+    return prev or curr
+
+def build_paragraphs_from_layout(page, heading_boost=1.25, gap_multiplier=1.2) -> list[str]:
+    """
+    Build paragraphs from PDF layout:
+      - use page.get_text("dict") to read blocks/lines/spans + coordinates
+      - compute median body font size & line height
+      - start a new paragraph on (a) large vertical gap, (b) heading-sized line, or (c) empty line
+    """
+    pd = page.get_text("dict")
+    lines = []
+    sizes = []
+    heights = []
+
+    for blk in pd.get("blocks", []):
+        if blk.get("type") != 0:
+            continue  # skip images etc.
+        for ln in blk.get("lines", []):
+            # line text from spans
+            spans = ln.get("spans", [])
+            text = "".join(s.get("text", "") for s in spans).strip()
+            if not text:
+                continue
+            y0, y1 = ln.get("bbox", [0, 0, 0, 0])[1:3]
+            mid = (y0 + y1) / 2.0
+            sz = _median_or_default([s.get("size", 0) for s in spans], default=12.0)
+            height = max(1.0, y1 - y0)
+            lines.append({"text": text, "mid": mid, "size": sz, "height": height})
+            sizes.append(sz)
+            heights.append(height)
+
+    if not lines:
+        # fall back to simple text if something goes wrong
+        raw = page.get_text("text").strip()
+        return [raw] if raw else []
+
+    # sort by vertical position (top to bottom)
+    lines.sort(key=lambda d: d["mid"])
+
+    body_size = _median_or_default(sizes, 12.0)
+    body_h = _median_or_default(heights, 12.0)
+    gap_thresh = body_h * gap_multiplier
+
+    paras = []
+    cur = ""
+    prev_mid = None
+    prev_size = None
+
+    for ln in lines:
+        txt, mid, sz = ln["text"], ln["mid"], ln["size"]
+        is_heading = sz >= body_size * heading_boost
+
+        # Decide if we should start a new paragraph
+        new_para = False
+        if prev_mid is not None:
+            if abs(mid - prev_mid) > gap_thresh:
+                new_para = True
+            elif is_heading or (prev_size and prev_size >= body_size * heading_boost):
+                new_para = True
+
+        if new_para:
+            if cur.strip():
+                paras.append(cur.strip())
+            cur = txt
+        else:
+            cur = _dehyphenate_join(cur, txt) if cur else txt
+
+        prev_mid, prev_size = mid, sz
+
+    if cur.strip():
+        paras.append(cur.strip())
+
+    return paras
+
 def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) -> tuple[list[str], list[dict]]:
     """
-    Returns (chunks, metas) with accurate page labels and case/para detection.
-    meta: {pdf_index, page_label, page_num, paras [ints], cases [ints], file}
+    Layout-aware extraction:
+      - paragraphs come from visual line grouping (no need for blank lines)
+      - paragraphs split into ~chunk_words_hint sentence chunks when very long
+      - per-chunk meta: page label, PDF page, detected paras, detected cases (from page header)
     """
     chunks, metas = [], []
     try:
@@ -947,19 +1042,19 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
 
     for pno in range(len(doc)):
         page = doc.load_page(pno)
-        page_text = clean_page_text(page.get_text("text"))
         page_label = page.get_label() or str(pno + 1)
-        paras = split_into_paragraphs(page_text)
+
+        # NEW: layout-aware paragraphs
+        paras = build_paragraphs_from_layout(page)
 
         for para in paras:
-            # split very long paragraphs into sentence-ish parts near hint size
-            words = para.split()
+            # break very long paragraphs near hint size by sentences
             parts = [para]
+            words = para.split()
             if len(words) > chunk_words_hint * 2:
-                ss = re.split(r"(?<=[\.\?\!…])\s+", para)
-                cur, acc = [], 0
-                parts = []
-                for s in ss:
+                sentence_bits = re.split(r"(?<=[\.\?\!…])\s+", para)
+                cur, acc, parts = [], 0, []
+                for s in sentence_bits:
                     cur.append(s)
                     acc += len(s.split())
                     if acc >= chunk_words_hint:
@@ -969,16 +1064,20 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
                     parts.append(" ".join(cur).strip())
 
             for part in parts:
+                if not part.strip():
+                    continue
                 chunks.append(part)
                 metas.append({
                     "pdf_index": pno,
                     "page_label": page_label,
                     "page_num": pno + 1,
+                    # Para numbers from text (para./Rn./¶/[n]); this NEVER sets case numbers
                     "paras": detect_para_numbers(part) or detect_para_numbers(para),
-                    # attach case by page-level header scan; fallback to inline
-                    "cases": case_for_page(pno) or detect_case_numbers(part) or detect_case_numbers(para),
+                    # Case numbers only from page-level headers/titles (strict match)
+                    "cases": case_for_page(pno),
                     "file": "EUCapML - Course Booklet.pdf",
                 })
+
     doc.close()
     return chunks, metas
 
@@ -1156,6 +1255,21 @@ with st.sidebar:
         except Exception as e:
             st.warning(f"Preview failed: {e}")
 
+    # --- Ad-hoc parser test: inspect paragraphs on a specific PDF page ---
+    test_page = st.number_input("Preview booklet page (PDF page index, 1-based)", min_value=1, step=1, value=1)
+    if st.checkbox("Preview parsed paragraphs on this page"):
+        try:
+            doc = fitz.open("assets/EUCapML - Course Booklet.pdf")
+            p = doc.load_page(int(test_page) - 1)
+            paras = build_paragraphs_from_layout(p)  # <- uses the layout-aware builder you added
+            st.write(f"Paragraphs on page {test_page}: {len(paras)}")
+            for i, pa in enumerate(paras[:8], 1):
+                preview = pa[:260] + ("…" if len(pa) > 260 else "")
+                st.write(f"**Para {i}:**", preview)
+            doc.close()
+        except Exception as e:
+            st.warning(f"Preview failed: {e}")
+    
     # --- Quick check for a specific Case number ---
     case_test = st.text_input("Find snippets for Case number (e.g., 14)")
     if case_test.strip().isdigit():

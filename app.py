@@ -840,23 +840,6 @@ def filter_sources_by_indices(source_lines: list[str], used: list[int]) -> list[
             out.append(source_lines[n - 1])
     return out
 
-# ---- Course Booklet parsing helpers (fixed) ----
-def split_into_paragraphs(text: str) -> list[str]:
-    """Split page text into paragraphs using blank lines; fall back to grouping lines."""
-    paras = [t.strip() for t in re.split(r"\n\s*\n", text) if t.strip()]
-    if paras:
-        return paras
-    # Fallback: group every ~8 lines into a paragraph
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    out, cur = [], []
-    for i, ln in enumerate(lines):
-        cur.append(ln)
-        if (i + 1) % 8 == 0:
-            out.append(" ".join(cur)); cur = []
-    if cur:
-        out.append(" ".join(cur))
-    return out
-
 # Paragraph markers may appear as "para. 115", "paragraph 115", "Rn. 115", "[115]", "¶ 115"
 
 _para_patterns = [
@@ -1018,12 +1001,145 @@ def build_paragraphs_from_layout(page, heading_boost=1.25, gap_multiplier=1.2) -
 
     return paras
 
+# ======== Anchor-based paragraph extraction (bold margin numbers) ========
+import statistics as stats
+
+ANCHOR_NUM_RE = re.compile(r"^\d{1,4}$")  # stand-alone number (1..9999)
+BOLD_TOKENS = ("bold", "black", "heavy", "semibold", "demi")  # font name heuristics
+
+def _is_bold_font(font_name: str) -> bool:
+    if not font_name:
+        return False
+    f = font_name.lower()
+    return any(tok in f for tok in BOLD_TOKENS)
+
+def _median(xs, default=12.0):
+    xs = [x for x in xs if isinstance(x, (int, float))]
+    return stats.median(xs) if xs else default
+
+def _page_lines_with_spans(page) -> list[dict]:
+    """Return lines with geometry and spans: [{'y0','y1','x0','x1','text','spans':[...]}]."""
+    d = page.get_text("dict")
+    out = []
+    for blk in d.get("blocks", []):
+        if blk.get("type") != 0:
+            continue
+        for ln in blk.get("lines", []):
+            spans = ln.get("spans", [])
+            txt = "".join(s.get("text", "") for s in spans).strip()
+            if not txt:
+                continue
+            x0, y0, x1, y1 = ln.get("bbox", [0, 0, 0, 0])
+            out.append({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "text": txt, "spans": spans})
+    out.sort(key=lambda L: (L["y0"], L["x0"]))
+    return out
+
+def _left_gutter_threshold(lines: list[dict]) -> float:
+    """Compute a dynamic left gutter threshold (points)."""
+    if not lines:
+        return 60.0
+    min_x = min(L["x0"] for L in lines)
+    # Many PDFs put margin numbers within ~30–60 pt from min_x
+    return min_x + 50.0
+
+def _find_anchors(lines: list[dict]) -> list[dict]:
+    """Find bold margin numbers that form paragraph anchors."""
+    gutter = _left_gutter_threshold(lines)
+    # Estimate a typical body font size to avoid tiny artifacts
+    sizes = []
+    for L in lines:
+        for s in L["spans"]:
+            sizes.append(s.get("size", 0))
+    body_size = _median(sizes, 11.0)
+
+    anchors = []
+    for L in lines:
+        # Require the whole line to be just a number (avoid 'Art 7 (1)' etc.)
+        if not ANCHOR_NUM_RE.match(L["text"]):
+            continue
+        if L["x0"] > gutter:
+            continue  # not in left gutter
+        # Consider line "bold" if a majority of its spans are bold-ish or larger than body
+        bold_votes = 0
+        for s in L["spans"]:
+            if _is_bold_font(s.get("font", "")) or s.get("size", 0) >= body_size * 1.05:
+                bold_votes += 1
+        if bold_votes < max(1, len(L["spans"]) // 2):
+            continue
+
+        anchors.append({
+            "para": int(L["text"]),
+            "y0": L["y0"],
+            "y1": L["y1"],
+            "x1": L["x1"],  # right edge of the number
+        })
+
+    # Deduplicate anchors that vertically overlap (sometimes numbers repeat as tiny artifacts)
+    anchors.sort(key=lambda a: (a["y0"], a["para"]))
+    dedup = []
+    for a in anchors:
+        if dedup and abs(a["y0"] - dedup[-1]["y0"]) < 2.0:
+            # keep the leftmost (already so), prefer the lower 'para' number if different
+            continue
+        dedup.append(a)
+    return dedup
+
+def _join_text(acc: str, piece: str) -> str:
+    if not acc:
+        return piece
+    if not piece:
+        return acc
+    if acc.endswith("-") and piece and piece[:1].islower():
+        # dehyphenate soft breaks
+        return acc[:-1] + piece
+    if acc.endswith((" ", "—", "–")) or piece.startswith((" ", "—", "–")):
+        return acc + piece
+    return acc + " " + piece
+
+def extract_paragraphs_by_anchors(page) -> list[dict]:
+    """
+    Returns [{'para': 115, 'text': '...'}, ...] by:
+      1) Finding bold stand-alone numbers in left gutter as anchors
+      2) Assigning subsequent right-hand text lines up to the next anchor
+    """
+    lines = _page_lines_with_spans(page)
+    if not lines:
+        raw = page.get_text("text").strip()
+        return [{"para": None, "text": raw}] if raw else []
+
+    anchors = _find_anchors(lines)
+    out = []
+    if not anchors:
+        # Fallback: return the page as one paragraph without para number
+        text = page.get_text("text").strip()
+        return [{"para": None, "text": text}] if text else []
+
+    # Build ranges between anchors
+    for i, a in enumerate(anchors):
+        y_top = a["y0"]
+        y_bot = anchors[i + 1]["y0"] if i + 1 < len(anchors) else float("inf")
+        x_min = a["x1"] + 6.0  # ensure we take text to the right of margin number
+        acc = ""
+        for L in lines:
+            if L["y0"] < y_top or L["y0"] >= y_bot:
+                continue
+            if L["x1"] <= x_min:
+                # this line is still in the left gutter / number column – skip
+                continue
+            acc = _join_text(acc, L["text"])
+        if acc.strip():
+            out.append({"para": a["para"], "text": acc.strip()})
+
+    return out
+    
+# ======== /Anchor-based paragraph extraction ========
 def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) -> tuple[list[str], list[dict]]:
     """
-    Layout-aware extraction:
-      - paragraphs come from visual line grouping (no need for blank lines)
-      - paragraphs split into ~chunk_words_hint sentence chunks when very long
-      - per-chunk meta: page label, PDF page, detected paras, detected cases (from page header)
+    Anchor-driven extraction:
+      - Detect bold left-gutter numbers as paragraph anchors
+      - Attach right-hand text to the next anchor
+      - Optionally split very long paragraphs into ~chunk_words_hint chunks
+      - Add page label / PDF page / para number; case numbers (if you keep _scan_case_headers) come from headers only
     """
     chunks, metas = [], []
     try:
@@ -1031,7 +1147,13 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
     except Exception:
         return [], []
 
-    case_ranges = _scan_case_headers(pdf_path)
+    # Optional: keep your header-based case mapping, if you use it elsewhere
+    case_ranges = {}
+    if '_scan_case_headers' in globals():
+        try:
+            case_ranges = _scan_case_headers(pdf_path)
+        except Exception:
+            case_ranges = {}
 
     def case_for_page(pno: int) -> list[int]:
         hits = []
@@ -1044,17 +1166,21 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
         page = doc.load_page(pno)
         page_label = page.get_label() or str(pno + 1)
 
-        # NEW: layout-aware paragraphs
-        paras = build_paragraphs_from_layout(page)
+        para_items = extract_paragraphs_by_anchors(page)  # <-- NEW: anchor-based
+        if not para_items:
+            continue
 
-        for para in paras:
-            # break very long paragraphs near hint size by sentences
-            parts = [para]
-            words = para.split()
+        for item in para_items:
+            para_no = item["para"]
+            text = item["text"]
+
+            # Split long paragraphs by sentences near the hint size, preserving para number
+            parts = [text]
+            words = text.split()
             if len(words) > chunk_words_hint * 2:
-                sentence_bits = re.split(r"(?<=[\.\?\!…])\s+", para)
+                ss = re.split(r"(?<=[\.\?\!…])\s+", text)
                 cur, acc, parts = [], 0, []
-                for s in sentence_bits:
+                for s in ss:
                     cur.append(s)
                     acc += len(s.split())
                     if acc >= chunk_words_hint:
@@ -1064,16 +1190,14 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
                     parts.append(" ".join(cur).strip())
 
             for part in parts:
-                if not part.strip():
+                if not part:
                     continue
                 chunks.append(part)
                 metas.append({
                     "pdf_index": pno,
                     "page_label": page_label,
                     "page_num": pno + 1,
-                    # Para numbers from text (para./Rn./¶/[n]); this NEVER sets case numbers
-                    "paras": detect_para_numbers(part) or detect_para_numbers(para),
-                    # Case numbers only from page-level headers/titles (strict match)
+                    "paras": [para_no] if para_no is not None else [],
                     "cases": case_for_page(pno),
                     "file": "EUCapML - Course Booklet.pdf",
                 })
@@ -1082,10 +1206,6 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
     return chunks, metas
 
 def format_manual_citation(meta: dict) -> str:
-    """
-    "Course Booklet — Case Study 14, p. iii (PDF 5), para. 115"
-    Falls back gracefully if no para or case was detected.
-    """
     paras = meta.get("paras") or []
     cases = meta.get("cases") or []
     page_label = meta.get("page_label") or ""
@@ -1283,6 +1403,25 @@ with st.sidebar:
                 st.caption(format_manual_citation(meta))
         except Exception as e:
             st.warning(f"Case scan failed: {e}")
+
+    st.markdown("**Anchor check (bold margin numbers)**")
+    test_page = st.number_input("Preview PDF page (1-based)", min_value=1, step=1, value=1)
+    if st.checkbox("Show anchors and paragraph text on this page"):
+        try:
+            doc = fitz.open("assets/EUCapML - Course Booklet.pdf")
+            p = doc.load_page(int(test_page) - 1)
+            # show detected anchors
+            lines = _page_lines_with_spans(p)
+            anchors = _find_anchors(lines)
+            st.write(f"Detected anchors on page {test_page}: {[a['para'] for a in anchors] or '—'}")
+            items = extract_paragraphs_by_anchors(p)
+            st.write(f"Paragraphs built: {len(items)}")
+            for it in items[:6]:
+                snip = it["text"][:300] + ("…" if len(it["text"]) > 300 else "")
+                st.write(f"**para {it['para'] if it['para'] is not None else '—'}**: {snip}")
+            doc.close()
+        except Exception as e:
+            st.warning(f"Anchor preview failed: {e}")
 
 # Main UI
 st.image("assets/logo.png", width=240)

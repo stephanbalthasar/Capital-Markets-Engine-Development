@@ -562,11 +562,16 @@ def collect_corpus(student_answer: str, extra_user_q: str, max_fetch: int = 20) 
     return fetched
 
 # ---- Manual relevance terms per question ----
-def manual_chunk_relevant(text: str, extracted_keywords: list[str]) -> bool:
-    return any(kw.lower() in text.lower() for kw in extracted_keywords)
+def manual_chunk_relevant(text: str, extracted_keywords: list[str], user_query: str = "") -> bool:
+    q_terms = [w.lower() for w in re.findall(r"[A-Za-zÄÖÜäöüß0-9\-]{3,}", user_query or "")]
+    keys = [k.lower() for k in (extracted_keywords or [])]
+    tgt = text.lower()
+    return any(k in tgt for k in (keys + q_terms))
 
-def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend, extracted_keywords, top_k_pages=8, chunk_words=170):
 
+def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend,
+                                  extracted_keywords, user_query: str = "",
+                                  top_k_pages=8, chunk_words=170):
                                       
     # ---- Load & chunk Course Booklet with page/para/case metadata
     manual_chunks, manual_metas = [], []
@@ -578,18 +583,20 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
     except Exception as e:
         st.warning(f"Could not load course manual: {e}")
 
-    # ✅ Filter manual chunks by the active question to avoid irrelevant booklet citations
+
+    # ✅ Filter manual chunks using keywords + the user's query AND case numbers, if any
     selected_q = st.session_state.get("selected_question", "Question 1")
+    uq_cases = detect_case_numbers(user_query or "")
     filtered_chunks, filtered_metas = [], []
     for ch, m in zip(manual_chunks, manual_metas):
-        if manual_chunk_relevant(ch, extracted_keywords):
+        has_kw = manual_chunk_relevant(ch, extracted_keywords, user_query)
+        case_match = bool(uq_cases and set(uq_cases).intersection(set(m.get("cases") or [])))
+        if has_kw or case_match:
             filtered_chunks.append(ch)
             filtered_metas.append(m)
-
-    # If filtering removes everything (e.g., unusual terms), fall back to the original set
     if filtered_chunks:
         manual_chunks, manual_metas = filtered_chunks, filtered_metas
-
+    
     # ---- Prepare manual meta tuples with a unique key per *page* so we can group snippets by page
     manual_meta = []
     for m in manual_metas:
@@ -625,14 +632,14 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
         all_meta   = all_meta[:m]
 
     # Query vector built from student + model slice
-    query = (student_answer or "") + "\n\n" + (model_answer_filtered or "")
+    query = "\n\n".join([s for s in [user_query, student_answer, model_answer_filtered] if s])
     embs = embed_texts([query] + all_chunks, backend)
     qv, cvs = embs[0], embs[1:]
     sims = [cos_sim(qv, v) for v in cvs]
     idx = np.argsort(sims)[::-1]
 
     # ✅ Similarity floor to keep only reasonably relevant snippets
-    MIN_SIM = 0.18  # tune 0.10–0.18 if needed
+    MIN_SIM = 0.20  # tune 0.10–0.18 if needed
 
     # ---- Select top snippets grouped by (manual page) or (web page index)
     per_page = {}
@@ -750,7 +757,7 @@ EXCERPTS (quote sparingly; cite using [1], [2], …):
 {excerpts_block}
 
 TASK (you MUST follow these steps):
-1) Extract the student's core CLAIMS as short bullets (no more than 3–5 bullets). For EACH claim, give it one of the labesl "Correct" / "Incorrect" / "Not supported".
+1) Extract the student's core CLAIMS as short bullets (no more than 3–5 bullets). For EACH claim, give it one of the labels "Correct" / "Incorrect" / "Not supported".
 2) Where you label a student core claim as incorrect, explain briefly why.
 3) Where important aspects are missing, explain what aspects are missing, and why they are important. 
 4) Give concise IMPROVEMENT TIPS (1–3 bullets) tied to the rubric issues, ideally with a numeric citation.
@@ -776,23 +783,6 @@ def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_blo
 # ------------------------------ Chat and Feebdack Helpers ----------
 def web_page_relevant(text: str, extracted_keywords: list[str]) -> bool:
     return any(kw.lower() in text.lower() for kw in extracted_keywords)
-
-def parse_cited_indices(text: str) -> list[int]:
-    """Return sorted unique [n] indices used in text."""
-    try:
-        return sorted(set(int(x) for x in re.findall(r"\[(\d+)\]", text or "")))
-    except Exception:
-        return []
-
-def filter_sources_by_indices(source_lines: list[str], used: list[int]) -> list[str]:
-    """Return only those lines whose [n] was actually cited; preserve numbering."""
-    if not used:
-        return []
-    out = []
-    for n in used:
-        if 1 <= n <= len(source_lines):
-            out.append(source_lines[n - 1])
-    return out
 
 # ---- Output completeness helpers ----
 def is_incomplete_text(text: str) -> bool:
@@ -831,10 +821,6 @@ def render_sources_used(source_lines: list[str]) -> None:
         for line in source_lines:
             st.markdown(f"- {line}")
 
-def clear_chat_draft():
-    # Clear the persistent composer safely during the button's on_click callback
-    st.session_state["chat_draft"] = ""
-
 # --- Citation post-processing & filtering ---
 def parse_cited_indices(text: str) -> list[int]:
     """Return sorted unique [n] indices used in text."""
@@ -870,23 +856,20 @@ def split_into_paragraphs(text: str) -> list[str]:
         out.append(" ".join(cur))
     return out
 
-# Paragraph markers actually present in the booklet:
-#  - "para. 115"/"paragraph 115"/"Rn. 115"
-#  - left-margin bold numbers extracted as **176**, ** 10 **, etc.
+# Paragraph markers may appear as "para. 115", "paragraph 115", "Rn. 115", "[115]", "¶ 115"
 _para_patterns = [
     re.compile(r"\bpara(?:graph)?\.?\s*(\d{1,4})\b", re.I),
     re.compile(r"\brn\.?\s*(\d{1,4})\b", re.I),
-    re.compile(r"\*\*\s*(\d{1,4})\s*\*"),
+    re.compile(r"\[\s*(\d{1,4})\s*\]"),
+    re.compile(r"¶\s*(\d{1,4})"),
 ]
 
-# Case markers: prefer "Case Study N", also accept "Case N"/"Fall N"
+# Case markers: title/header or inline mention
 _case_patterns = [
     re.compile(r"\bCase\s*Study\s*(\d{1,4})\b", re.I),
-    re.compile(r"\b(?:Case|Fall)\s*(\d{1,4})\b", re.I),
+    re.compile(r"\bCase\s*(\d{1,4})\b", re.I),
+    re.compile(r"\bFall\s*(\d{1,4})\b", re.I),
 ]
-
-# Case markers: "Case 14" or "Fall 14"
-_case_pattern = re.compile(r"\b(?:Case|Fall)\s*(\d{1,4})\b", re.I)
 
 def detect_para_numbers(text: str) -> list[int]:
     nums = []
@@ -918,10 +901,33 @@ def detect_case_numbers(text: str) -> list[int]:
             out.append(x)
     return [int(x) for x in out]
 
+@st.cache_resource(show_spinner=False)
+def _scan_case_headers(pdf_path: str) -> dict[int, tuple[int, int]]:
+    """
+    Returns {case_number: (start_page_index, end_page_index)} by scanning page headers/titles.
+    """
+    out = {}
+    try:
+        doc = fitz.open(pdf_path)
+    except Exception:
+        return out
+    current = None
+    for pno in range(len(doc)):
+        page = doc.load_page(pno)
+        blocks = page.get_text("blocks")
+        text = " ".join(b[4] for b in blocks if len(b) >= 5)
+        cs = detect_case_numbers(text)
+        if cs:
+            current = cs[0]
+            out.setdefault(current, [pno, pno])
+        elif current is not None:
+            out[current][1] = pno
+    doc.close()
+    return {k: (v[0], v[1]) for k, v in out.items()}
+
 def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) -> tuple[list[str], list[dict]]:
     """
-    Returns (chunks, metas) with accurate page *labels* (printed page numbers),
-    not just 1-based PDF indices. We split by paragraphs and break very long ones by sentences.
+    Returns (chunks, metas) with accurate page labels and case/para detection.
     meta: {pdf_index, page_label, page_num, paras [ints], cases [ints], file}
     """
     chunks, metas = [], []
@@ -930,54 +936,47 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
     except Exception:
         return [], []
 
+    case_ranges = _scan_case_headers(pdf_path)
+
+    def case_for_page(pno: int) -> list[int]:
+        hits = []
+        for c, (lo, hi) in case_ranges.items():
+            if lo <= pno <= hi:
+                hits.append(c)
+        return hits
+
     for pno in range(len(doc)):
         page = doc.load_page(pno)
-        page_text = page.get_text("text")
-        # Remove repeating headers like "Version 11 June 2025" and stray page numbers
-        page_text = clean_page_text(page_text)
+        page_text = clean_page_text(page.get_text("text"))
         page_label = page.get_label() or str(pno + 1)
         paras = split_into_paragraphs(page_text)
-        
+
         for para in paras:
-            # Break very long paragraphs roughly to the hint size
+            # split very long paragraphs into sentence-ish parts near hint size
             words = para.split()
+            parts = [para]
             if len(words) > chunk_words_hint * 2:
-                parts = re.split(r"(?<=[\.\?\!…])\s+", para)
-                cur, cur_words = [], 0
-                for s in parts:
+                ss = re.split(r"(?<=[\.\?\!…])\s+", para)
+                cur, acc = [], 0
+                parts = []
+                for s in ss:
                     cur.append(s)
-                    cur_words += len(s.split())
-                    if cur_words >= chunk_words_hint:
-                        para_part = " ".join(cur).strip()
-                        chunks.append(para_part)
-                        metas.append({
-                            "pdf_index": pno,
-                            "page_label": page_label,
-                            "page_num": pno + 1,  # numeric fallback for anchors
-                            "paras": detect_para_numbers(para_part) or detect_para_numbers(para),
-                            "cases": detect_case_numbers(para_part) or detect_case_numbers(para),
-                            "file": "EUCapML - Course Booklet.pdf",  # <-- unify name with actual path
-                        })
-                        cur, cur_words = [], 0
+                    acc += len(s.split())
+                    if acc >= chunk_words_hint:
+                        parts.append(" ".join(cur).strip())
+                        cur, acc = [], 0
                 if cur:
-                    para_part = " ".join(cur).strip()
-                    chunks.append(para_part)
-                    metas.append({
-                        "pdf_index": pno,
-                        "page_label": page_label,
-                        "page_num": pno + 1,
-                        "paras": detect_para_numbers(para_part) or detect_para_numbers(para),
-                        "cases": detect_case_numbers(para_part) or detect_case_numbers(para),
-                        "file": "EUCapML - Course Booklet.pdf",
-                    })
-            else:
-                chunks.append(para)
+                    parts.append(" ".join(cur).strip())
+
+            for part in parts:
+                chunks.append(part)
                 metas.append({
                     "pdf_index": pno,
                     "page_label": page_label,
                     "page_num": pno + 1,
-                    "paras": detect_para_numbers(para),
-                    "cases": detect_case_numbers(para),
+                    "paras": detect_para_numbers(part) or detect_para_numbers(para),
+                    # attach case by page-level header scan; fallback to inline
+                    "cases": case_for_page(pno) or detect_case_numbers(part) or detect_case_numbers(para),
                     "file": "EUCapML - Course Booklet.pdf",
                 })
     doc.close()
@@ -985,36 +984,31 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
 
 def format_manual_citation(meta: dict) -> str:
     """
-    Manual citation for the Sources list:
-    'Course Booklet — Case Study 14, para. 115'
-    or (if only one is detected): 'Course Booklet — para. 115'  / 'Course Booklet — Case Study 14'
-    Falls back to 'Course Booklet — (no paragraph number detected)' if nothing is found.
+    "Course Booklet — Case Study 14, p. iii (PDF 5), para. 115"
+    Falls back gracefully if no para or case was detected.
     """
     paras = meta.get("paras") or []
     cases = meta.get("cases") or []
+    page_label = meta.get("page_label") or ""
+    pdf_p = meta.get("page_num")
 
-    # Normalize, keep at most a short range for readability
-    xs = sorted({int(p) for p in paras if isinstance(p, (int, str)) and str(p).isdigit()})
-    if len(xs) >= 2 and xs[1] == xs[0] + 1:
-        para_anchor = f"paras {xs[0]}–{xs[1]}"
-    elif xs:
-        para_anchor = f"para. {xs[0]}"
-    else:
-        para_anchor = ""
+    para_anchor = f"para. {paras[0]}" if paras else ""
+    case_anchor = f"Case Study {cases[0]}" if cases else ""
 
-    parts = ["Course Booklet"]
     anchors = []
-    if cases:
-        anchors.append(f"Case Study {cases[0]}")
+    if case_anchor:
+        anchors.append(case_anchor)
+    if page_label or pdf_p:
+        if page_label and pdf_p:
+            anchors.append(f"p. {page_label} (PDF {pdf_p})")
+        elif page_label:
+            anchors.append(f"p. {page_label}")
+        else:
+            anchors.append(f"PDF {pdf_p}")
     if para_anchor:
         anchors.append(para_anchor)
 
-    if anchors:
-        parts.append(" — " + ", ".join(anchors))
-    else:
-        parts.append(" — (no paragraph number detected)")
-
-    return "".join(parts)
+    return "Course Booklet — " + (", ".join(anchors) if anchors else "(no page anchor found)")
 
 # ---- Simple page cleaner for booklet parsing ----
 def clean_page_text(t: str) -> str:
@@ -1161,7 +1155,21 @@ with st.sidebar:
                     st.caption(f"Cases: {meta['cases'] or '—'} | Paras: {meta['paras'] or '—'}")
         except Exception as e:
             st.warning(f"Preview failed: {e}")
-            
+
+    # --- Quick check for a specific Case number ---
+    case_test = st.text_input("Find snippets for Case number (e.g., 14)")
+    if case_test.strip().isdigit():
+        try:
+            chunks, metas = extract_manual_chunks_with_refs("assets/EUCapML - Course Booklet.pdf", chunk_words_hint=160)
+            n = int(case_test.strip())
+            hits = [(c, m) for c, m in zip(chunks, metas) if n in (m.get("cases") or [])]
+            st.write(f"Found {len(hits)} chunks for Case {n}")
+            for snip, meta in hits[:5]:
+                st.write("•", (snip[:220] + ("…" if len(snip) > 220 else "")))
+                st.caption(format_manual_citation(meta))
+        except Exception as e:
+            st.warning(f"Case scan failed: {e}")
+
 # Main UI
 st.image("assets/logo.png", width=240)
 st.title("EUCapML Case Tutor")
@@ -1204,7 +1212,10 @@ with colA:
                 top_pages, source_lines = [], []
                 if enable_web:
                     pages = collect_corpus(student_answer, "", max_fetch=22)
-                    top_pages, source_lines = retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend, extracted_keywords, top_k_pages=max_sources, chunk_words=170)
+                    top_pages, source_lines = retrieve_snippets_with_manual(
+                        student_answer, model_answer_filtered, pages, backend, extracted_keywords,
+                        user_query="", top_k_pages=max_sources, chunk_words=170
+                    )
                     
             # Breakdown
             with st.expander("🔬 Issue-by-issue breakdown"):
@@ -1303,7 +1314,7 @@ with colB:
                 pages = collect_corpus(student_answer, user_q, max_fetch=20)
                 top_pages, source_lines = retrieve_snippets_with_manual(
                     student_answer, model_answer_filtered, pages, backend, extracted_keywords,
-                    top_k_pages=max_sources, chunk_words=170
+                    user_query=user_q, top_k_pages=max_sources, chunk_words=170
                 )
                                             
             sources_block = "\n".join(source_lines) if source_lines else "(no web sources available)"

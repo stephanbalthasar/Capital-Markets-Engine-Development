@@ -1042,7 +1042,7 @@ def _left_gutter_threshold(lines: list[dict]) -> float:
     # Many PDFs put margin numbers within ~30–60 pt from min_x
     return min_x + 50.0
 
-def _find_anchors(lines: list[dict]) -> list[dict]:
+def _find_para_number_anchors(lines: list[dict]) -> list[dict]:
     """Find bold margin numbers that form paragraph anchors."""
     gutter = _left_gutter_threshold(lines)
     # Estimate a typical body font size to avoid tiny artifacts
@@ -1096,39 +1096,135 @@ def _join_text(acc: str, piece: str) -> str:
         return acc + piece
     return acc + " " + piece
 
+# --- New: detect "Case Study N" (or "Case N") headings on their own line ---
+CASE_HEADING_RES = [
+    re.compile(r"(?im)^\s*Case\s*Study\s*(\d{1,4})\b"),
+    re.compile(r"(?im)^\s*Case\s*(\d{1,4})\b"),
+]
+
+def _body_left_threshold(lines: list[dict], gutter: float) -> float:
+    """
+    Estimate the left edge of the main text column as the median x0 of lines
+    that are clearly to the right of the left gutter.
+    """
+    xs = [L["x0"] for L in lines if L["x0"] > gutter + 5.0]
+    return float(stats.median(xs)) if xs else (gutter + 60.0)
+
+def _line_is_heading(L: dict, body_size: float) -> bool:
+    # treat as heading if majority of spans are bold-ish OR size is larger
+    spans = L.get("spans", [])
+    big = any(s.get("size", 0) >= body_size * 1.12 for s in spans)
+    bold = sum(1 for s in spans if _is_bold_font(s.get("font", ""))) >= max(1, len(spans)//2 or 1)
+    return big or bold
+
+def _find_case_heading_anchors(lines: list[dict]) -> list[dict]:
+    """
+    Returns [{'kind':'case','case':N,'y0':...,'y1':...,'x0':...,'x1':...}, ...]
+    ONLY when the line itself looks like a heading and starts with Case/Case Study.
+    """
+    # derive typical body size once
+    sizes = [s.get("size", 0) for L in lines for s in L.get("spans", [])]
+    body_size = float(stats.median(sizes)) if sizes else 11.0
+
+    anchors = []
+    for L in lines:
+        txt = L["text"]
+        # Fast precheck to avoid regex on every line
+        if not (txt.lower().startswith("case") or txt.lower().startswith(" case")):
+            continue
+        # Needs to look like a heading (font size/bold)
+        if not _line_is_heading(L, body_size):
+            continue
+        # Strict regex match at line start
+        case_no = None
+        for rx in CASE_HEADING_RES:
+            m = rx.match(txt)
+            if m:
+                case_no = int(m.group(1))
+                break
+        if case_no is None:
+            continue
+        anchors.append({
+            "kind": "case",
+            "case": case_no,
+            "y0": L["y0"], "y1": L["y1"],
+            "x0": L["x0"], "x1": L["x1"],
+        })
+
+    # de-dup case headings that overlap vertically (keep the first)
+    anchors.sort(key=lambda a: (a["y0"], a["case"]))
+    dedup = []
+    for a in anchors:
+        if dedup and abs(a["y0"] - dedup[-1]["y0"]) < 2.0:
+            continue
+        dedup.append(a)
+    return dedup
+
 def extract_paragraphs_by_anchors(page) -> list[dict]:
     """
-    Returns [{'para': 115, 'text': '...'}, ...] by:
-      1) Finding bold stand-alone numbers in left gutter as anchors
-      2) Assigning subsequent right-hand text lines up to the next anchor
+    Build paragraph chunks anchored either by:
+    - bold, stand-alone left-gutter numbers (paragraph anchors), or
+    - a heading line that starts with "Case Study N" / "Case N" (case anchors).
+
+    Returns: [{'kind':'para','para':115,'case':None,'text':'...'}, {'kind':'case','case':14,'para':None,'text':'...'}, ...]
     """
     lines = _page_lines_with_spans(page)
     if not lines:
         raw = page.get_text("text").strip()
-        return [{"para": None, "text": raw}] if raw else []
+        return [{"kind": "page", "para": None, "case": None, "text": raw}] if raw else []
 
-    anchors = _find_anchors(lines)
-    out = []
-    if not anchors:
-        # Fallback: return the page as one paragraph without para number
+    # collect anchors
+    para_anchors = _find_para_number_anchors(lines)   # formerly _find_anchors
+    case_anchors = _find_case_heading_anchors(lines)
+
+    if not para_anchors and not case_anchors:
         text = page.get_text("text").strip()
-        return [{"para": None, "text": text}] if text else []
+        return [{"kind": "page", "para": None, "case": None, "text": text}] if text else []
 
-    # Build ranges between anchors
+    # union & sort
+    # normalize shapes to common dict with 'kind' plus y0/y1/x0/x1
+    for a in para_anchors:
+        a["kind"] = "para"
+        a.setdefault("x0", a.get("x1", 0) - 4)  # safe default
+
+    anchors = case_anchors + para_anchors
+    anchors.sort(key=lambda a: (a["y0"], 0 if a["kind"] == "case" else 1))  # case before para if tied
+
+    # compute gutter and stable body column
+    gutter = _left_gutter_threshold(lines)
+    body_left = _body_left_threshold(lines, gutter)
+
+    out = []
+    # iterate anchor ranges
     for i, a in enumerate(anchors):
         y_top = a["y0"]
         y_bot = anchors[i + 1]["y0"] if i + 1 < len(anchors) else float("inf")
-        x_min = a["x1"] + 6.0  # ensure we take text to the right of margin number
-        acc = ""
-        for L in lines:
-            if L["y0"] < y_top or L["y0"] >= y_bot:
-                continue
-            if L["x1"] <= x_min:
-                # this line is still in the left gutter / number column – skip
-                continue
-            acc = _join_text(acc, L["text"])
-        if acc.strip():
-            out.append({"para": a["para"], "text": acc.strip()})
+
+        if a["kind"] == "para":
+            # for numbered paragraphs, require line to be inside the main column
+            x_min = max(a["x1"] + 4.0, body_left - 2.0)
+            acc = ""
+            for L in lines:
+                if L["y0"] < y_top or L["y0"] >= y_bot:
+                    continue
+                if L["x1"] <= x_min:
+                    continue
+                acc = _join_text(acc, L["text"])
+            if acc.strip():
+                out.append({"kind": "para", "para": a["para"], "case": None, "text": acc.strip()})
+
+        else:  # "case" heading
+            # take the following paragraph(s) in the body column, skipping the heading line itself
+            x_min = body_left - 3.0
+            acc = ""
+            for L in lines:
+                if L["y0"] <= a["y1"] + 0.5 or L["y0"] >= y_bot:
+                    continue  # skip the heading line; stop at next anchor
+                if L["x1"] <= x_min:
+                    continue
+                acc = _join_text(acc, L["text"])
+            if acc.strip():
+                out.append({"kind": "case", "para": None, "case": a["case"], "text": acc.strip()})
 
     return out
     
@@ -1171,37 +1267,34 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
             continue
 
         for item in para_items:
-            para_no = item["para"]
+            para_no = item.get("para")
+            case_no = item.get("case")
             text = item["text"]
 
-            # Split long paragraphs by sentences near the hint size, preserving para number
+            # Split long paragraphs by sentences near the hint size, preserving anchor
             parts = [text]
             words = text.split()
             if len(words) > chunk_words_hint * 2:
                 ss = re.split(r"(?<=[\.\?\!…])\s+", text)
                 cur, acc, parts = [], 0, []
                 for s in ss:
-                    cur.append(s)
-                    acc += len(s.split())
+                    cur.append(s); acc += len(s.split())
                     if acc >= chunk_words_hint:
-                        parts.append(" ".join(cur).strip())
-                        cur, acc = [], 0
-                if cur:
-                    parts.append(" ".join(cur).strip())
+                        parts.append(" ".join(cur).strip()); cur, acc = [], 0
+                if cur: parts.append(" ".join(cur).strip())
 
             for part in parts:
-                if not part:
-                    continue
+                if not part: continue
                 chunks.append(part)
                 metas.append({
                     "pdf_index": pno,
                     "page_label": page_label,
                     "page_num": pno + 1,
-                    "paras": [para_no] if para_no is not None else [],
-                    "cases": case_for_page(pno),
+                    "paras": [para_no] if (item["kind"] == "para" and para_no is not None) else [],
+                    "cases": [case_no] if (item["kind"] == "case" and case_no is not None) else case_for_page(pno),
                     "file": "EUCapML - Course Booklet.pdf",
                 })
-
+                
     doc.close()
     return chunks, metas
 

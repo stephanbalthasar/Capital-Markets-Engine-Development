@@ -1453,36 +1453,6 @@ with st.sidebar:
             st.exception(e)
     
     # ---- Course Booklet diagnostics ----
-    st.subheader("Course Booklet diagnostics")
-    if st.checkbox("Preview parsed booklet (first 6 pages)"):
-        try:
-            chunks, metas = extract_manual_chunks_with_refs("assets/EUCapML - Course Booklet.pdf", chunk_words_hint=160)
-            by_page = {}
-            for ch, m in zip(chunks, metas):
-                by_page.setdefault(m["page_label"], []).append((ch[:140] + ("…" if len(ch) > 140 else ""), m))
-            for i, (lbl, arr) in enumerate(list(by_page.items())[:6], start=1):
-                st.markdown(f"**Page label {lbl}** (PDF p. {arr[0][1]['page_num']})")
-                for snip, meta in arr[:2]:  # show 2 snippets per page
-                    st.write("•", snip)
-                    st.caption(f"Cases: {meta['cases'] or '—'} | Paras: {meta['paras'] or '—'}")
-        except Exception as e:
-            st.warning(f"Preview failed: {e}")
-
-    # --- Ad-hoc parser test: inspect paragraphs on a specific PDF page ---
-    test_page = st.number_input("Preview booklet page (PDF page index, 1-based)", min_value=1, step=1, value=1)
-    if st.checkbox("Preview parsed paragraphs on this page"):
-        try:
-            doc = fitz.open("assets/EUCapML - Course Booklet.pdf")
-            p = doc.load_page(int(test_page) - 1)
-            paras = build_paragraphs_from_layout(p)  # <- uses the layout-aware builder you added
-            st.write(f"Paragraphs on page {test_page}: {len(paras)}")
-            for i, pa in enumerate(paras[:8], 1):
-                preview = pa[:260] + ("…" if len(pa) > 260 else "")
-                st.write(f"**Para {i}:**", preview)
-            doc.close()
-        except Exception as e:
-            st.warning(f"Preview failed: {e}")
-    
     # --- Quick check for a specific Case number ---
     case_test = st.text_input("Find snippets for Case number (e.g., 14)")
     if case_test.strip().isdigit():
@@ -1498,20 +1468,27 @@ with st.sidebar:
             st.warning(f"Case scan failed: {e}")
 
     st.markdown("**Anchor check (bold margin numbers)**")
+    # --- Anchor check (bold margin numbers + Case headings) ---
     test_page = st.number_input("Preview PDF page (1-based)", min_value=1, step=1, value=1)
     if st.checkbox("Show anchors and paragraph text on this page"):
         try:
             doc = fitz.open("assets/EUCapML - Course Booklet.pdf")
             p = doc.load_page(int(test_page) - 1)
-            # show detected anchors
+
             lines = _page_lines_with_spans(p)
-            anchors = _find_anchors(lines)
-            st.write(f"Detected anchors on page {test_page}: {[a['para'] for a in anchors] or '—'}")
+            para_anchors = _find_para_number_anchors(lines)      # new name
+            case_anchors = _find_case_heading_anchors(lines)      # case headings
+
+            st.write(f"Para anchors: {[a['para'] for a in para_anchors] or '—'}")
+            st.write(f"Case anchors: {[a['case'] for a in case_anchors] or '—'}")
+
             items = extract_paragraphs_by_anchors(p)
-            st.write(f"Paragraphs built: {len(items)}")
+            st.write(f"Paragraph blocks: {len(items)}")
             for it in items[:6]:
+                head = f"para {it['para']}" if it.get('kind') == 'para' else (f"Case {it['case']}" if it.get('kind') == 'case' else '—')
                 snip = it["text"][:300] + ("…" if len(it["text"]) > 300 else "")
-                st.write(f"**para {it['para'] if it['para'] is not None else '—'}**: {snip}")
+                st.write(f"**{head}**: {snip}")
+
             doc.close()
         except Exception as e:
             st.warning(f"Anchor preview failed: {e}")

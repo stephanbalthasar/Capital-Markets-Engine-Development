@@ -1364,38 +1364,181 @@ def _extract_paragraph_items_for_page(page) -> tuple[list[dict], list[dict]]:
 
     return items, case_starts
 
+# ============ Deterministic booklet parsing helpers ============
+
+# Accepts: "12", "12.", "12)", "12 –", "12 —" etc. at the **very start** of a line.
+LEAD_NUM_RE   = re.compile(r"^\s*(\d{1,4})(?:[.)]|\s*[-–—])?\s+")
+CASE_LINE_RE  = re.compile(r"^\s*Case\s*Study\s*(\d{1,4})\b", re.I)
+
+from typing import Optional
+
+def _page_lines_with_spans(page) -> list[dict]:
+    """
+    Return ordered line dicts with geometry + spans:
+      [{'x0','y0','x1','y1','text','spans':[{'text','size','font','bbox'...}, ...]}, ...]
+    """
+    d = page.get_text("dict")
+    out = []
+    for blk in d.get("blocks", []):
+        if blk.get("type") != 0:
+            continue
+        for ln in blk.get("lines", []):
+            spans = ln.get("spans", [])
+            txt = "".join(s.get("text", "") for s in spans)
+            if not txt.strip():
+                continue
+            x0, y0, x1, y1 = ln.get("bbox", [0, 0, 0, 0])
+            out.append({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "text": txt, "spans": spans})
+    out.sort(key=lambda L: (L["y0"], L["x0"]))
+    return out
+
+def _median(xs, default=12.0):
+    xs = [x for x in xs if isinstance(x, (int, float))]
+    return stats.median(xs) if xs else default
+
+def _body_left_threshold(lines: list[dict]) -> float:
+    """
+    Left edge of main body column = median x0 of lines (robust even if margin numbers exist).
+    """
+    xs = [L["x0"] for L in lines]
+    if not xs:
+        return 60.0
+    # Use 40th percentile as a robust body-left estimate (ignores a few very-left gutter lines)
+    xs_sorted = sorted(xs)
+    idx = max(0, min(len(xs_sorted)-1, int(0.40 * len(xs_sorted))))
+    return xs_sorted[idx]
+
+def _dehyphen_join(prev: str, curr: str) -> str:
+    if not prev:
+        return curr
+    if prev.endswith("-") and curr and curr[:1].islower():
+        return prev[:-1] + curr
+    # normal join with single space
+    return (prev + " " + curr).strip()
+
+def _match_leading_number(line_text: str) -> Optional[int]:
+    m = LEAD_NUM_RE.match(line_text)
+    if not m:
+        return None
+    try:
+        n = int(m.group(1))
+        return n
+    except Exception:
+        return None
+
+def _strip_leading_number(line_text: str) -> str:
+    """
+    Remove the leading '12', '12.', '12)', '12 –', etc., and return the remaining text.
+    Ensures we do **not** lose the first line of the paragraph.
+    """
+    return LEAD_NUM_RE.sub("", line_text, count=1).strip()
+
+def _find_case_starts(lines: list[dict], body_left: float) -> list[dict]:
+    """
+    Return [{'case':N,'y0':<line top>}, ...] for lines starting with 'Case Study N ...'
+    that appear **in the body column** (not the left number gutter).
+    """
+    hits = []
+    for L in lines:
+        # keep only lines that begin near/at the body column
+        if L["x0"] < body_left - 3.0:
+            continue
+        m = CASE_LINE_RE.match(L["text"])
+        if m:
+            hits.append({"case": int(m.group(1)), "y0": L["y0"]})
+    hits.sort(key=lambda d: d["y0"])
+    return hits
+
+def _extract_page_paragraphs(page) -> tuple[list[dict], list[dict]]:
+    """
+    Parse a page into anchored paragraphs and case-start markers.
+
+    Returns:
+      para_items: [{'para':N, 'y0':float, 'text':str}]
+      case_starts: [{'case':K, 'y0':float}]
+    """
+    lines = _page_lines_with_spans(page)
+    if not lines:
+        return [], []
+
+    body_left = _body_left_threshold(lines)
+
+    para_items: list[dict] = []
+    case_starts = _find_case_starts(lines, body_left)
+
+    cur_para_num = None
+    cur_para_y0  = None
+    cur_text     = ""
+
+    for L in lines:
+        txt = L["text"].strip()
+
+        # New paragraph if this line starts with a leading number
+        n = _match_leading_number(txt)
+        if n is not None:
+            # flush previous paragraph
+            if cur_para_num is not None and cur_text.strip():
+                para_items.append({"para": cur_para_num, "y0": cur_para_y0, "text": cur_text.strip()})
+            # start new paragraph; keep the **rest of this line** (first-line text!)
+            cur_para_num = n
+            cur_para_y0  = L["y0"]
+            cur_text     = _strip_leading_number(txt)
+        else:
+            # continuation line for current paragraph
+            if cur_para_num is not None:
+                cur_text = _dehyphen_join(cur_text, txt)
+            else:
+                # lines before the first numbered paragraph on the page: ignore for numbered parsing
+                pass
+
+    # flush trailing paragraph
+    if cur_para_num is not None and cur_text.strip():
+        para_items.append({"para": cur_para_num, "y0": cur_para_y0, "text": cur_text.strip()})
+
+    return para_items, case_starts
+# ============ /Deterministic booklet parsing helpers ============
 def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) -> tuple[list[str], list[dict]]:
+    """
+    Deterministic extraction:
+      • Each chunk corresponds to one numbered paragraph (paras=[N]).
+      • 'case_section' stores the enclosing "Case Study K" based on the nearest
+        preceding 'Case Study K ...' line (persists across pages).
+      • Very long paragraphs are split by sentences near 'chunk_words_hint' while
+        keeping the same anchors.
+    """
     chunks, metas = [], []
     try:
         doc = fitz.open(pdf_path)
     except Exception:
         return [], []
 
-    current_case_section: int | None = None
+    current_case_section: Optional[int] = None  # carried across pages
+
     for pno in range(len(doc)):
         page = doc.load_page(pno)
         page_label = page.get_label() or str(pno + 1)
 
-        para_items, case_starts = _extract_paragraph_items_for_page(page)
-        para_items.sort(key=lambda it: it["y0"])
-        case_starts.sort(key=lambda cs: cs["y0"])
+        para_items, case_starts = _extract_page_paragraphs(page)
+        # walk down the page; whenever a case start appears above the paragraph, update section
+        case_idx = 0
+        case_starts = sorted(case_starts, key=lambda d: d["y0"])
 
-        j = 0
-        for it in para_items:
-            # Walk case_starts down the page: any new case that starts above this paragraph
-            while j < len(case_starts) and case_starts[j]["y0"] <= it["y0"] + 0.5:
-                current_case_section = case_starts[j]["case"]
-                j += 1
+        for it in sorted(para_items, key=lambda d: d["y0"]):
+            # advance case section
+            while case_idx < len(case_starts) and case_starts[case_idx]["y0"] <= it["y0"] + 0.5:
+                current_case_section = case_starts[case_idx]["case"]
+                case_idx += 1
 
             para_no = it["para"]
             text    = it["text"]
 
+            # split long paragraphs (keep anchors)
             parts = [text]
             words = text.split()
             if len(words) > chunk_words_hint * 2:
-                ss = re.split(r"(?<=[\.\?\!…])\s+", text)
+                bits = re.split(r"(?<=[\.\?\!…])\s+", text)
                 cur, acc, parts = [], 0, []
-                for s in ss:
+                for s in bits:
                     cur.append(s); acc += len(s.split())
                     if acc >= chunk_words_hint:
                         parts.append(" ".join(cur).strip()); cur, acc = [], 0
@@ -1410,14 +1553,15 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
                     "pdf_index": pno,
                     "page_label": page_label,
                     "page_num": pno + 1,
-                    "paras": [para_no],              # primary anchor
-                    "cases": [],                     # leave empty for paragraph chunks
-                    "case_section": current_case_section,  # enclosing Case Study N (may be None)
+                    "paras": [para_no],          # <- primary anchor
+                    "cases": [],                 # <- not used for paragraph chunks
+                    "case_section": current_case_section,  # <- enclosing Case Study (may be None)
                     "file": "EUCapML - Course Booklet.pdf",
                 })
 
     doc.close()
     return chunks, metas
+
 
 def format_manual_citation(meta: dict) -> str:
     paras = meta.get("paras") or []
@@ -1575,16 +1719,17 @@ with st.sidebar:
     
     # ---- Course Booklet diagnostics ----
     # ---- Tiny diagnostic to confirm parsing ----
-    st.subheader("🔎 Booklet parsing check")
-    test_page = st.number_input("PDF page (1-based)", min_value=1, step=1, value=1)
-    if st.checkbox("Show para anchors + case-section mapping on this page"):
+    st.subheader("🔎 Parser check (dev)")
+    test_page = st.number_input("PDF page (1-based)", min_value=1, value=7, step=1)
+    if st.checkbox("Show paragraphs + case-section on this page"):
         try:
             doc = fitz.open("assets/EUCapML - Course Booklet.pdf")
             p = doc.load_page(int(test_page) - 1)
-            items, case_starts = _extract_paragraph_items_for_page(p)
-            st.write(f"Case starts on this page: {[cs['case'] for cs in case_starts] or '—'}")
-            for it in items[:12]:
-                st.write(f"• para {it['para']}  (y0={it['y0']:.1f})  →  text: {it['text'][:180]}{'…' if len(it['text'])>180 else ''}")
+            para_items, case_starts = _extract_page_paragraphs(p)
+            st.write(f"Case starts on this page: {[c['case'] for c in case_starts] or '—'}")
+            for it in para_items[:15]:
+                snip = it["text"][:180] + ("…" if len(it["text"]) > 180 else "")
+                st.write(f"• para {it['para']} (y0={it['y0']:.1f}): {snip}")
             doc.close()
         except Exception as e:
             st.warning(f"Preview failed: {e}")

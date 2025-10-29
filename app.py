@@ -1605,6 +1605,21 @@ with st.sidebar:
             st.exception(e)
     
     # ---- Course Booklet diagnostics ----
+    # ---- Tiny diagnostic to confirm parsing ----
+    st.subheader("📄 Booklet parsing check (developer)")
+    test_page = st.number_input("PDF page (1-based)", min_value=1, step=1, value=1)
+    if st.checkbox("Show anchored paragraphs on this page"):
+        try:
+            doc = fitz.open("assets/EUCapML - Course Booklet.pdf")
+            p = doc.load_page(int(test_page) - 1)
+            items, case_on_page = _extract_paragraph_items_for_page(p)
+            st.write(f"Case heading on this page: {case_on_page or '—'}")
+            for it in items[:10]:
+                snip = it["text"][:250] + ("…" if len(it["text"]) > 250 else "")
+                st.write(f"• para {it['para']}: {snip}")
+            doc.close()
+        except Exception as e:
+            st.warning(f"Preview failed: {e}")
     # --- Quick check for a specific Case number ---
     case_test = st.text_input("Find snippets for Case number (e.g., 14)")
     if case_test.strip().isdigit():

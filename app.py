@@ -1620,6 +1620,7 @@ with st.sidebar:
             doc.close()
         except Exception as e:
             st.warning(f"Preview failed: {e}")
+    
     # --- Quick check for a specific Case number ---
     case_test = st.text_input("Find snippets for Case number (e.g., 14)")
     if case_test.strip().isdigit():
@@ -1633,32 +1634,6 @@ with st.sidebar:
                 st.caption(format_manual_citation(meta))
         except Exception as e:
             st.warning(f"Case scan failed: {e}")
-
-    st.markdown("**Anchor check (bold margin numbers)**")
-    # --- Anchor check (bold margin numbers + Case headings) ---
-    test_page = st.number_input("Preview PDF page (1-based)", min_value=1, step=1, value=1)
-    if st.checkbox("Show anchors and paragraph text on this page"):
-        try:
-            doc = fitz.open("assets/EUCapML - Course Booklet.pdf")
-            p = doc.load_page(int(test_page) - 1)
-
-            lines = _page_lines_with_spans(p)
-            para_anchors = _find_para_number_anchors(lines)      # new name
-            case_anchors = _find_case_heading_anchors(lines)      # case headings
-
-            st.write(f"Para anchors: {[a['para'] for a in para_anchors] or '—'}")
-            st.write(f"Case anchors: {[a['case'] for a in case_anchors] or '—'}")
-
-            items = extract_paragraphs_by_anchors(p)
-            st.write(f"Paragraph blocks: {len(items)}")
-            for it in items[:6]:
-                head = f"para {it['para']}" if it.get('kind') == 'para' else (f"Case {it['case']}" if it.get('kind') == 'case' else '—')
-                snip = it["text"][:300] + ("…" if len(it["text"]) > 300 else "")
-                st.write(f"**{head}**: {snip}")
-
-            doc.close()
-        except Exception as e:
-            st.warning(f"Anchor preview failed: {e}")
 
 # Main UI
 st.image("assets/logo.png", width=240)

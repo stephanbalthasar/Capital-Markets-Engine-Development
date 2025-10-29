@@ -1364,50 +1364,6 @@ def _extract_paragraph_items_for_page(page) -> tuple[list[dict], list[dict]]:
 
     return items, case_starts
 
-# ---------------- Group right-hand paragraph text for each anchor ----------------
-def _extract_paragraph_items_for_page(page) -> tuple[list[dict], int | None]:
-    """
-    Extract anchored paragraphs for a page and return:
-      ( items, case_heading_found_on_this_page )
-    where items = [{'para':115,'text':'...'} , ...]
-    """
-    lines = _page_lines_with_spans(page)
-    if not lines:
-        return [], None
-
-    # Case heading (if the page *starts* a case section)
-    case_on_page = _detect_case_heading_on_page(lines)
-
-    # Paragraph anchors and body column
-    anchors = _find_para_number_anchors(lines)
-    if not anchors:
-        return [], case_on_page
-
-    gutter = _left_gutter_threshold(lines)
-    body_left = _body_left_threshold(lines, gutter)
-
-    items = []
-    for i, a in enumerate(anchors):
-        y_top = a["y0"]
-        y_bot = anchors[i + 1]["y0"] if i + 1 < len(anchors) else float("inf")
-        x_min = max(a["x1"] + 4.0, body_left - 2.0)  # collect only right-hand text
-
-        acc = ""
-        for L in lines:
-            if L["y0"] < y_top or L["y0"] >= y_bot:
-                continue
-            if L["x1"] <= x_min:
-                continue  # still in margin/gutter
-            # soft de-hyphenation across lines
-            if acc.endswith("-") and L["text"] and L["text"][:1].islower():
-                acc = acc[:-1] + L["text"]
-            else:
-                acc = (acc + " " + L["text"]).strip() if acc else L["text"]
-
-        if acc.strip():
-            items.append({"para": a["para"], "text": acc.strip()})
-    return items, case_on_page
-
 def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) -> tuple[list[str], list[dict]]:
     chunks, metas = [], []
     try:

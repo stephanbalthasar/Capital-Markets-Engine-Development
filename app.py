@@ -1298,34 +1298,6 @@ def _find_case_starts(lines: list[dict], gutter: float) -> list[dict]:
     starts.sort(key=lambda d: d["y0"])
     return starts
 
-# ---------------- Detect "Case Study N" headings & keep current section ----------------
-def _detect_case_heading_on_page(lines: list[dict]) -> int | None:
-    """
-    If the page contains a heading line that *looks like a heading* and starts with "Case Study N",
-    return that case number; otherwise None.
-    """
-    # derive a typical body size to tell headings apart (bigger or bold)
-    sizes = [s.get("size", 0) for L in lines for s in L.get("spans", [])]
-    body_size = float(stats.median(sizes)) if sizes else 11.0
-
-    def _looks_like_heading(L: dict) -> bool:
-        spans = L.get("spans", [])
-        big = any(s.get("size", 0) >= body_size * 1.12 for s in spans)
-        bold = sum(1 for s in spans if _is_bold_font(s.get("font", ""))) >= max(1, len(spans)//2 or 1)
-        return big or bold
-
-    # look at the first ~12 lines (typical headings at/near top)
-    for L in lines[:12]:
-        txt = L["text"]
-        if not (txt.lower().startswith("case") or txt.lower().startswith(" case")):
-            continue
-        if not _looks_like_heading(L):
-            continue
-        m = CASE_HEADING_RE.match(txt)
-        if m:
-            return int(m.group(1))
-    return None
-
 # ---------------- Find bold left-gutter paragraph number anchors ----------------
 def _find_para_number_anchors(lines: list[dict]) -> list[dict]:
     """
@@ -1360,11 +1332,6 @@ def _find_para_number_anchors(lines: list[dict]) -> list[dict]:
     return dedup
 
 def _extract_paragraph_items_for_page(page) -> tuple[list[dict], list[dict]]:
-    """
-    Return:
-      items = [{'para':115,'y0':..., 'text':'...'}, ...] for anchored paragraphs, and
-      case_starts = [{'case':N,'y0':...}, ...] for 'Case Study N ...' line-starts.
-    """
     lines = _page_lines_with_spans(page)
     if not lines:
         return [], []
@@ -1372,33 +1339,26 @@ def _extract_paragraph_items_for_page(page) -> tuple[list[dict], list[dict]]:
     gutter = _left_gutter_threshold(lines)
     body_left = _body_left_threshold(lines, gutter)
 
-    # 1) case starts found anywhere in the body column on this page
-    case_starts = _find_case_starts(lines, gutter)  # sorted by y0
-
-    # 2) paragraph anchors in the left gutter
-    anchors = _find_para_number_anchors(lines)
+    case_starts = _find_case_starts(lines, gutter)      # ← NEW
+    anchors     = _find_para_number_anchors(lines)
     if not anchors:
         return [], case_starts
 
-    # 3) collect right-hand text between consecutive anchors
     items = []
     for i, a in enumerate(anchors):
         y_top = a["y0"]
         y_bot = anchors[i + 1]["y0"] if i + 1 < len(anchors) else float("inf")
-        x_min = max(a["x1"] + 4.0, body_left - 2.0)  # collect only right-hand text
-
+        x_min = max(a["x1"] + 4.0, body_left - 2.0)
         acc = ""
         for L in lines:
-            if L["y0"] < y_top or L["y0"] >= y_bot:
+            if L["y0"] < y_top or L["y0"] >= y_bot:  # between anchors
                 continue
-            if L["x1"] <= x_min:
-                continue  # still in margin/gutter
-            # dehyphenation across lines
+            if L["x1"] <= x_min:                     # stay out of gutter
+                continue
             if acc.endswith("-") and L["text"] and L["text"][:1].islower():
-                acc = acc[:-1] + L["text"]
+                acc = acc[:-1] + L["text"]           # dehyphenate
             else:
                 acc = (acc + " " + L["text"]).strip() if acc else L["text"]
-
         if acc.strip():
             items.append({"para": a["para"], "y0": y_top, "text": acc.strip()})
 
@@ -1449,45 +1409,31 @@ def _extract_paragraph_items_for_page(page) -> tuple[list[dict], int | None]:
     return items, case_on_page
 
 def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) -> tuple[list[str], list[dict]]:
-    """
-    Deterministic, anchor-driven extraction:
-      - Each chunk corresponds to a paragraph whose left gutter has a bold stand-alone number.
-      - Each chunk gets:
-          paras = [that paragraph number]   (primary anchor)
-          cases = []                        (reserved for true case-heading chunks; we don't emit those here)
-          case_section = N or None          (set by nearest preceding "Case Study N ..." start, across pages)
-          page_label / page_num / file
-      - Very long paragraphs are split by sentences near 'chunk_words_hint' but keep the same anchors.
-    """
     chunks, metas = [], []
     try:
         doc = fitz.open(pdf_path)
     except Exception:
         return [], []
 
-    current_case_section: int | None = None  # carries across pages
+    current_case_section: int | None = None
     for pno in range(len(doc)):
         page = doc.load_page(pno)
         page_label = page.get_label() or str(pno + 1)
 
-        # Paragraph items + all case-start line positions on this page
         para_items, case_starts = _extract_paragraph_items_for_page(page)
-
-        # Sort both by y0 to assign case_section as we walk down the page
         para_items.sort(key=lambda it: it["y0"])
         case_starts.sort(key=lambda cs: cs["y0"])
 
-        j = 0  # index into case_starts (y-ordered)
+        j = 0
         for it in para_items:
-            # Advance case section if a new "Case Study N ..." start occurs above this paragraph
+            # Walk case_starts down the page: any new case that starts above this paragraph
             while j < len(case_starts) and case_starts[j]["y0"] <= it["y0"] + 0.5:
                 current_case_section = case_starts[j]["case"]
                 j += 1
 
             para_no = it["para"]
-            text = it["text"]
+            text    = it["text"]
 
-            # Split long paragraphs into sentence-ish pieces (keep anchors)
             parts = [text]
             words = text.split()
             if len(words) > chunk_words_hint * 2:
@@ -1508,9 +1454,9 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
                     "pdf_index": pno,
                     "page_label": page_label,
                     "page_num": pno + 1,
-                    "paras": [para_no],                 # primary anchor
-                    "cases": [],                        # no citing case for normal paras
-                    "case_section": current_case_section,  # enclosing case study number (may be None)
+                    "paras": [para_no],              # primary anchor
+                    "cases": [],                     # leave empty for paragraph chunks
+                    "case_section": current_case_section,  # enclosing Case Study N (may be None)
                     "file": "EUCapML - Course Booklet.pdf",
                 })
 

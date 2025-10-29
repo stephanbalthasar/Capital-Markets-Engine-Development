@@ -1231,9 +1231,10 @@ def extract_paragraphs_by_anchors(page) -> list[dict]:
 
 # ======== /Anchor-based paragraph extraction ========
 # ---------------- PDF line access & typography helpers ----------------
+# ---------------- PDF line access & typography helpers ----------------
 ANCHOR_NUM_RE = re.compile(r"^\d{1,4}$")  # stand-alone number (1..9999)
 BOLD_TOKENS = ("bold", "black", "heavy", "semibold", "demi")  # font name heuristics
-CASE_HEADING_RE = re.compile(r"(?im)^\s*Case\s*Study\s*(\d{1,4})\b")
+CASE_LINE_RE = re.compile(r"(?im)^\s*Case\s*Study\s*(\d{1,4})\b")  # "Case Study N ..." at line start
 
 def _is_bold_font(font_name: str) -> bool:
     if not font_name:
@@ -1274,11 +1275,28 @@ def _left_gutter_threshold(lines: list[dict]) -> float:
 
 def _body_left_threshold(lines: list[dict], gutter: float) -> float:
     """
-    Left edge of main text column = median x0 of lines visibly to the right of gutter.
-    Used to ensure we only collect 'right-hand' paragraph text (not the margin).
+    Left edge of main text column = median x0 of lines to the right of the gutter.
+    Ensures we only collect 'right-hand' paragraph text (not the margin).
     """
     xs = [L["x0"] for L in lines if L["x0"] > gutter + 5.0]
     return float(stats.median(xs)) if xs else (gutter + 60.0)
+
+def _find_case_starts(lines: list[dict], gutter: float) -> list[dict]:
+    """
+    Return [{'case': N, 'y0': <line_top>, 'x0': <line_left>} ...] for lines that begin with
+    'Case Study N ...'. These are ordinary body lines (not separate headings).
+    """
+    starts = []
+    body_left = _body_left_threshold(lines, gutter)
+    for L in lines:
+        # Must be in the body column (avoid left-margin number column)
+        if L["x0"] <= body_left - 3.0:
+            continue
+        m = CASE_LINE_RE.match(L["text"])
+        if m:
+            starts.append({"case": int(m.group(1)), "y0": L["y0"], "x0": L["x0"]})
+    starts.sort(key=lambda d: d["y0"])
+    return starts
 
 # ---------------- Detect "Case Study N" headings & keep current section ----------------
 def _detect_case_heading_on_page(lines: list[dict]) -> int | None:
@@ -1341,6 +1359,51 @@ def _find_para_number_anchors(lines: list[dict]) -> list[dict]:
         dedup.append(a)
     return dedup
 
+def _extract_paragraph_items_for_page(page) -> tuple[list[dict], list[dict]]:
+    """
+    Return:
+      items = [{'para':115,'y0':..., 'text':'...'}, ...] for anchored paragraphs, and
+      case_starts = [{'case':N,'y0':...}, ...] for 'Case Study N ...' line-starts.
+    """
+    lines = _page_lines_with_spans(page)
+    if not lines:
+        return [], []
+
+    gutter = _left_gutter_threshold(lines)
+    body_left = _body_left_threshold(lines, gutter)
+
+    # 1) case starts found anywhere in the body column on this page
+    case_starts = _find_case_starts(lines, gutter)  # sorted by y0
+
+    # 2) paragraph anchors in the left gutter
+    anchors = _find_para_number_anchors(lines)
+    if not anchors:
+        return [], case_starts
+
+    # 3) collect right-hand text between consecutive anchors
+    items = []
+    for i, a in enumerate(anchors):
+        y_top = a["y0"]
+        y_bot = anchors[i + 1]["y0"] if i + 1 < len(anchors) else float("inf")
+        x_min = max(a["x1"] + 4.0, body_left - 2.0)  # collect only right-hand text
+
+        acc = ""
+        for L in lines:
+            if L["y0"] < y_top or L["y0"] >= y_bot:
+                continue
+            if L["x1"] <= x_min:
+                continue  # still in margin/gutter
+            # dehyphenation across lines
+            if acc.endswith("-") and L["text"] and L["text"][:1].islower():
+                acc = acc[:-1] + L["text"]
+            else:
+                acc = (acc + " " + L["text"]).strip() if acc else L["text"]
+
+        if acc.strip():
+            items.append({"para": a["para"], "y0": y_top, "text": acc.strip()})
+
+    return items, case_starts
+
 # ---------------- Group right-hand paragraph text for each anchor ----------------
 def _extract_paragraph_items_for_page(page) -> tuple[list[dict], int | None]:
     """
@@ -1390,11 +1453,11 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
     Deterministic, anchor-driven extraction:
       - Each chunk corresponds to a paragraph whose left gutter has a bold stand-alone number.
       - Each chunk gets:
-          paras = [that paragraph number]
-          cases = []  (reserved only for true "Case Study N" heading chunks; we don't emit those here)
-          case_section = N  (the enclosing Case Study number; used later for retrieval/filtering)
+          paras = [that paragraph number]   (primary anchor)
+          cases = []                        (reserved for true case-heading chunks; we don't emit those here)
+          case_section = N or None          (set by nearest preceding "Case Study N ..." start, across pages)
           page_label / page_num / file
-      - Very long paragraphs are split by sentences near 'chunk_words_hint' but *keep* the same anchors.
+      - Very long paragraphs are split by sentences near 'chunk_words_hint' but keep the same anchors.
     """
     chunks, metas = [], []
     try:
@@ -1402,25 +1465,29 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
     except Exception:
         return [], []
 
-    current_case_section: int | None = None  # persists across pages until a new heading appears
-
+    current_case_section: int | None = None  # carries across pages
     for pno in range(len(doc)):
         page = doc.load_page(pno)
         page_label = page.get_label() or str(pno + 1)
 
-        # 1) Build anchored paragraph items for this page
-        para_items, case_on_this_page = _extract_paragraph_items_for_page(page)
+        # Paragraph items + all case-start line positions on this page
+        para_items, case_starts = _extract_paragraph_items_for_page(page)
 
-        # 2) Update current case section if a new case heading is present on this page
-        if case_on_this_page is not None:
-            current_case_section = case_on_this_page
+        # Sort both by y0 to assign case_section as we walk down the page
+        para_items.sort(key=lambda it: it["y0"])
+        case_starts.sort(key=lambda cs: cs["y0"])
 
-        # 3) Emit chunks (if no anchored paragraphs on this page, we skip it)
-        for item in para_items:
-            para_no = item["para"]
-            text = item["text"]
+        j = 0  # index into case_starts (y-ordered)
+        for it in para_items:
+            # Advance case section if a new "Case Study N ..." start occurs above this paragraph
+            while j < len(case_starts) and case_starts[j]["y0"] <= it["y0"] + 0.5:
+                current_case_section = case_starts[j]["case"]
+                j += 1
 
-            # Split long paragraphs into sentence-ish pieces (keep same anchors)
+            para_no = it["para"]
+            text = it["text"]
+
+            # Split long paragraphs into sentence-ish pieces (keep anchors)
             parts = [text]
             words = text.split()
             if len(words) > chunk_words_hint * 2:
@@ -1441,9 +1508,9 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
                     "pdf_index": pno,
                     "page_label": page_label,
                     "page_num": pno + 1,
-                    "paras": [para_no],          # ← primary anchor for this chunk
-                    "cases": [],                 # ← we reserve this for true heading chunks (not emitted here)
-                    "case_section": current_case_section,  # ← enclosing Case Study number (may be None)
+                    "paras": [para_no],                 # primary anchor
+                    "cases": [],                        # no citing case for normal paras
+                    "case_section": current_case_section,  # enclosing case study number (may be None)
                     "file": "EUCapML - Course Booklet.pdf",
                 })
 
@@ -1606,35 +1673,20 @@ with st.sidebar:
     
     # ---- Course Booklet diagnostics ----
     # ---- Tiny diagnostic to confirm parsing ----
-    st.subheader("📄 Booklet parsing check (developer)")
+    st.subheader("🔎 Booklet parsing check")
     test_page = st.number_input("PDF page (1-based)", min_value=1, step=1, value=1)
-    if st.checkbox("Show anchored paragraphs on this page"):
+    if st.checkbox("Show para anchors + case-section mapping on this page"):
         try:
             doc = fitz.open("assets/EUCapML - Course Booklet.pdf")
             p = doc.load_page(int(test_page) - 1)
-            items, case_on_page = _extract_paragraph_items_for_page(p)
-            st.write(f"Case heading on this page: {case_on_page or '—'}")
-            for it in items[:10]:
-                snip = it["text"][:250] + ("…" if len(it["text"]) > 250 else "")
-                st.write(f"• para {it['para']}: {snip}")
+            items, case_starts = _extract_paragraph_items_for_page(p)
+            st.write(f"Case starts on this page: {[cs['case'] for cs in case_starts] or '—'}")
+            for it in items[:12]:
+                st.write(f"• para {it['para']}  (y0={it['y0']:.1f})  →  text: {it['text'][:180]}{'…' if len(it['text'])>180 else ''}")
             doc.close()
         except Exception as e:
             st.warning(f"Preview failed: {e}")
     
-    # --- Quick check for a specific Case number ---
-    case_test = st.text_input("Find snippets for Case number (e.g., 14)")
-    if case_test.strip().isdigit():
-        try:
-            chunks, metas = extract_manual_chunks_with_refs("assets/EUCapML - Course Booklet.pdf", chunk_words_hint=160)
-            n = int(case_test.strip())
-            hits = [(c, m) for c, m in zip(chunks, metas) if n in (m.get("cases") or [])]
-            st.write(f"Found {len(hits)} chunks for Case {n}")
-            for snip, meta in hits[:5]:
-                st.write("•", (snip[:220] + ("…" if len(snip) > 220 else "")))
-                st.caption(format_manual_citation(meta))
-        except Exception as e:
-            st.warning(f"Case scan failed: {e}")
-
 # Main UI
 st.image("assets/logo.png", width=240)
 st.title("EUCapML Case Tutor")

@@ -1503,65 +1503,82 @@ with st.sidebar:
     # ---- Course Booklet diagnostics ----
     # ---- Tiny diagnostic to confirm parsing ----
     with st.sidebar:
-        st.subheader("🔎 NEW parser sanity check")
+        st.subheader("🔎 Booklet diagnostics")
 
-        if PARSED_BOOKLET:
-            raw_paras = PARSED_BOOKLET.get("paragraphs", {})      # {int_or_str: {"text","page"}}
-            raw_cases = PARSED_BOOKLET.get("case_studies", {})    # {int_or_str: {"prompt":{...},"note":{...}}}
+        PDF_PATH = "assets/EUCapML - Course Booklet.pdf"
     
-            # --- Coerce keys to ints (robust even if they arrived as strings) ---
-            def _to_int_keys(d: dict) -> list[int]:
-                out = []
-                for k in d.keys():
-                    try:
-                        out.append(int(k))
-                    except Exception:
-                        # ignore non-numeric keys if any (should not happen)
-                        pass
-                return sorted(set(out))
+        # --- Production path: deterministic chunker (this is what your engine uses) ---
+        try:
+            manual_chunks, manual_metas = extract_manual_chunks_with_refs(PDF_PATH, chunk_words_hint=170)
+            # Count distinct numbered paragraphs
+            para_numbers = sorted({p for m in manual_metas for p in (m.get("paras") or [])})
+            # Case sections (enclosing "Case Study K" that a paragraph belongs to; may be None)
+            case_sections = sorted({m.get("case_section") for m in manual_metas if m.get("case_section")})
+            st.caption(f"Deterministic parser ➜ {len(para_numbers)} numbered paragraphs, {len(case_sections)} case sections")
+        except Exception as e:
+            para_numbers, case_sections = [], []
+            st.warning(f"Deterministic parser unavailable: {e}")
     
-            para_numbers = _to_int_keys(raw_paras)
-            case_numbers = _to_int_keys(raw_cases)
+        # Quick paragraph preview (production truth)
+        if para_numbers:
+            sel_para = st.number_input(
+                "Paragraph (production)",
+                min_value=min(para_numbers),
+                max_value=max(para_numbers),
+                value=para_numbers[0],
+                step=1,
+                key="prod_para_preview",
+            )
+            # Show the first chunk that carries this paragraph anchor
+            for ch, meta in zip(manual_chunks, manual_metas):
+                if sel_para in (meta.get("paras") or []):
+                    st.write(f"**para {sel_para} — {format_manual_citation(meta)}**")
+                    st.text(ch[:2000])
+                    break
     
-            st.caption(f"Found {len(para_numbers)} numbered paragraphs and {len(case_numbers)} case studies.")
+        st.divider()
     
-            # ---- Paragraph preview (all paragraphs) ----
-            if para_numbers:
-                sel_para = st.number_input(
-                    "Paragraph number",
-                    min_value=min(para_numbers),
-                    max_value=max(para_numbers),
-                    value=min(para_numbers),
-                    step=1,
-                    key="para_preview_new"
-                )
-                # Get the paragraph regardless of whether the dict uses int or str keys
-                p = raw_paras.get(sel_para) or raw_paras.get(str(sel_para)) or {}
-                if p:
-                    st.write(f"**Paragraph {int(sel_para)} (page {p.get('page', '?')})**")
-                    st.text((p.get("text") or "")[:2500])
-                else:
-                    st.info("No paragraph content found for that number.")
+        # --- NEW parser (experimental) — optional comparison ---
+        show_new = st.checkbox("Compare with NEW parser (experimental)", value=False)
+        if show_new:
+            try:
+                # Prefer global parsed booklet if present; else parse (cached) just for this check
+                @st.cache_data(show_spinner=False)
+                def _parse_booklet_for_diag(path: str):
+                    return parse_pdf_all_from_path(path)
     
-            # ---- Case study preview (prompt + note) ----
-            if case_numbers:
-                sel_cs = st.number_input(
-                    "Case Study #",
-                    min_value=min(case_numbers),
-                    max_value=max(case_numbers),
-                    value=min(case_numbers),
-                    step=1,
-                    key="cs_preview_new"
-                )
-                cs = raw_cases.get(sel_cs) or raw_cases.get(str(sel_cs)) or {}
-                if cs.get("prompt"):
-                    st.write(f"**Case Study {int(sel_cs)} — prompt (page {cs['prompt'].get('page','?')})**")
-                    st.text((cs["prompt"].get("text") or "")[:2500])
-                if cs.get("note"):
-                    st.write(f"**Case Study {int(sel_cs)} — note (page {cs['note'].get('page','?')})**")
-                    st.text((cs["note"].get("text") or "")[:2500])
-        else:
-            st.info("NEW parser is not available (file missing or parse error).")
+                parsed = PARSED_BOOKLET if 'PARSED_BOOKLET' in globals() and PARSED_BOOKLET else _parse_booklet_for_diag(PDF_PATH)
+    
+                new_paras = parsed.get("paragraphs", {})
+                new_cases = parsed.get("case_studies", {})
+    
+                # tolerate int or str keys
+                safe_ints = lambda d: sorted({int(k) for k in d.keys() if str(k).isdigit()})
+                new_para_nums  = safe_ints(new_paras)
+                new_case_nums  = safe_ints(new_cases)
+    
+                st.caption(f"NEW parser ➜ {len(new_para_nums)} numbered paragraphs, {len(new_case_nums)} case studies")
+    
+                probe = 124
+                has_124 = (probe in new_paras) or (str(probe) in new_paras)
+                st.write(f"NEW parser sees para {probe}: {'✅' if has_124 else '❌'}")
+    
+                # Optional preview from NEW parser
+                if new_para_nums:
+                    sel_np = st.number_input("Paragraph (NEW parser)", min_value=min(new_para_nums),
+                                             max_value=max(new_para_nums), value=min(new_para_nums), step=1,
+                                             key="new_para_preview")
+                    p = new_paras.get(sel_np) or new_paras.get(str(sel_np)) or {}
+                    if p:
+                        st.write(f"**para {int(sel_np)} (page {p.get('page','?')})**")
+                        st.text((p.get("text") or "")[:2000])
+            except Exception as e:
+                st.warning(f"NEW parser diagnostic failed: {e}")
+    
+        # Handy dev helper
+        if st.button("Clear cache (dev)"):
+            st.cache_data.clear()
+            st.success("Cache cleared")
             
         st.subheader("🔎 Parser check (dev)")
         test_page = st.number_input("PDF page (1-based)", min_value=1, value=7, step=1)

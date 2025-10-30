@@ -1502,7 +1502,7 @@ with st.sidebar:
     
     # ---- Course Booklet diagnostics ----
     # ---- Tiny diagnostic to confirm parsing ----
-        with st.sidebar:
+    with st.sidebar:
         st.subheader("🔎 NEW parser sanity check")
         if PARSED_BOOKLET:
             paras = PARSED_BOOKLET["paragraphs"]      # {n: {"text","page"}}

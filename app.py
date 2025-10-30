@@ -1505,63 +1505,63 @@ with st.sidebar:
     with st.sidebar:
         st.subheader("🔎 NEW parser sanity check")
 
-    if PARSED_BOOKLET:
-        raw_paras = PARSED_BOOKLET.get("paragraphs", {})      # {int_or_str: {"text","page"}}
-        raw_cases = PARSED_BOOKLET.get("case_studies", {})    # {int_or_str: {"prompt":{...},"note":{...}}}
-
-        # --- Coerce keys to ints (robust even if they arrived as strings) ---
-        def _to_int_keys(d: dict) -> list[int]:
-            out = []
-            for k in d.keys():
-                try:
-                    out.append(int(k))
-                except Exception:
-                    # ignore non-numeric keys if any (should not happen)
-                    pass
-            return sorted(set(out))
-
-        para_numbers = _to_int_keys(raw_paras)
-        case_numbers = _to_int_keys(raw_cases)
-
-        st.caption(f"Found {len(para_numbers)} numbered paragraphs and {len(case_numbers)} case studies.")
-
-        # ---- Paragraph preview (all paragraphs) ----
-        if para_numbers:
-            sel_para = st.number_input(
-                "Paragraph number",
-                min_value=min(para_numbers),
-                max_value=max(para_numbers),
-                value=min(para_numbers),
-                step=1,
-                key="para_preview_new"
-            )
-            # Get the paragraph regardless of whether the dict uses int or str keys
-            p = raw_paras.get(sel_para) or raw_paras.get(str(sel_para)) or {}
-            if p:
-                st.write(f"**Paragraph {int(sel_para)} (page {p.get('page', '?')})**")
-                st.text((p.get("text") or "")[:2500])
-            else:
-                st.info("No paragraph content found for that number.")
-
-        # ---- Case study preview (prompt + note) ----
-        if case_numbers:
-            sel_cs = st.number_input(
-                "Case Study #",
-                min_value=min(case_numbers),
-                max_value=max(case_numbers),
-                value=min(case_numbers),
-                step=1,
-                key="cs_preview_new"
-            )
-            cs = raw_cases.get(sel_cs) or raw_cases.get(str(sel_cs)) or {}
-            if cs.get("prompt"):
-                st.write(f"**Case Study {int(sel_cs)} — prompt (page {cs['prompt'].get('page','?')})**")
-                st.text((cs["prompt"].get("text") or "")[:2500])
-            if cs.get("note"):
-                st.write(f"**Case Study {int(sel_cs)} — note (page {cs['note'].get('page','?')})**")
-                st.text((cs["note"].get("text") or "")[:2500])
-    else:
-        st.info("NEW parser is not available (file missing or parse error).")
+        if PARSED_BOOKLET:
+            raw_paras = PARSED_BOOKLET.get("paragraphs", {})      # {int_or_str: {"text","page"}}
+            raw_cases = PARSED_BOOKLET.get("case_studies", {})    # {int_or_str: {"prompt":{...},"note":{...}}}
+    
+            # --- Coerce keys to ints (robust even if they arrived as strings) ---
+            def _to_int_keys(d: dict) -> list[int]:
+                out = []
+                for k in d.keys():
+                    try:
+                        out.append(int(k))
+                    except Exception:
+                        # ignore non-numeric keys if any (should not happen)
+                        pass
+                return sorted(set(out))
+    
+            para_numbers = _to_int_keys(raw_paras)
+            case_numbers = _to_int_keys(raw_cases)
+    
+            st.caption(f"Found {len(para_numbers)} numbered paragraphs and {len(case_numbers)} case studies.")
+    
+            # ---- Paragraph preview (all paragraphs) ----
+            if para_numbers:
+                sel_para = st.number_input(
+                    "Paragraph number",
+                    min_value=min(para_numbers),
+                    max_value=max(para_numbers),
+                    value=min(para_numbers),
+                    step=1,
+                    key="para_preview_new"
+                )
+                # Get the paragraph regardless of whether the dict uses int or str keys
+                p = raw_paras.get(sel_para) or raw_paras.get(str(sel_para)) or {}
+                if p:
+                    st.write(f"**Paragraph {int(sel_para)} (page {p.get('page', '?')})**")
+                    st.text((p.get("text") or "")[:2500])
+                else:
+                    st.info("No paragraph content found for that number.")
+    
+            # ---- Case study preview (prompt + note) ----
+            if case_numbers:
+                sel_cs = st.number_input(
+                    "Case Study #",
+                    min_value=min(case_numbers),
+                    max_value=max(case_numbers),
+                    value=min(case_numbers),
+                    step=1,
+                    key="cs_preview_new"
+                )
+                cs = raw_cases.get(sel_cs) or raw_cases.get(str(sel_cs)) or {}
+                if cs.get("prompt"):
+                    st.write(f"**Case Study {int(sel_cs)} — prompt (page {cs['prompt'].get('page','?')})**")
+                    st.text((cs["prompt"].get("text") or "")[:2500])
+                if cs.get("note"):
+                    st.write(f"**Case Study {int(sel_cs)} — note (page {cs['note'].get('page','?')})**")
+                    st.text((cs["note"].get("text") or "")[:2500])
+        else:
+            st.info("NEW parser is not available (file missing or parse error).")
             
         st.subheader("🔎 Parser check (dev)")
         test_page = st.number_input("PDF page (1-based)", min_value=1, value=7, step=1)

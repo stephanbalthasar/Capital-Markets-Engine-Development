@@ -1502,51 +1502,51 @@ with st.sidebar:
     
     # ---- Course Booklet diagnostics ----
     # ---- Tiny diagnostic to confirm parsing ----
-    with st.sidebar:
-    st.subheader("🔎 NEW parser sanity check")
-    if PARSED_BOOKLET:
-        paras = PARSED_BOOKLET["paragraphs"]      # {n: {"text","page"}}
-        cases = PARSED_BOOKLET["case_studies"]     # {n: {"prompt":{...},"note":{...}}}
-
-        st.caption(f"Found {len(paras)} numbered paragraphs and {len(cases)} case studies.")
-        # ---- Paragraph preview ----
-        if paras:
-            n = st.number_input("Paragraph number", min_value=min(paras.keys()),
-                                 max_value=max(paras.keys()), value=min(paras.keys()), step=1)
-            p = paras.get(int(n))
-            if p:
-                st.write(f"**Paragraph {int(n)} (page {p['page']})**")
-                st.text(p["text"][:2500])
-        # ---- Case Study preview ----
-        if cases:
-            k = st.number_input("Case Study #", min_value=min(cases.keys()),
-                                 max_value=max(cases.keys()), value=min(cases.keys()), step=1,
-                                 key="cs_preview_new")
-            cs = cases.get(int(k), {})
-            if "prompt" in cs:
-                st.write(f"**Case Study {int(k)} — prompt (page {cs['prompt']['page']})**")
-                st.text(cs["prompt"]["text"][:2500])
-            if "note" in cs:
-                st.write(f"**Case Study {int(k)} — note (page {cs['note']['page']})**")
-                st.text(cs["note"]["text"][:2500])
-    else:
-        st.info("NEW parser is not available (file missing or parse error).")
+        with st.sidebar:
+        st.subheader("🔎 NEW parser sanity check")
+        if PARSED_BOOKLET:
+            paras = PARSED_BOOKLET["paragraphs"]      # {n: {"text","page"}}
+            cases = PARSED_BOOKLET["case_studies"]     # {n: {"prompt":{...},"note":{...}}}
     
-    st.subheader("🔎 Parser check (dev)")
-    test_page = st.number_input("PDF page (1-based)", min_value=1, value=7, step=1)
-    if st.checkbox("Show paragraphs + case-section on this page"):
-        try:
-            doc = fitz.open("assets/EUCapML - Course Booklet.pdf")
-            p = doc.load_page(int(test_page) - 1)
-            para_items, case_starts = _extract_page_paragraphs(p)
-            st.write(f"Case starts on this page: {[c['case'] for c in case_starts] or '—'}")
-            for it in para_items[:15]:
-                snip = it["text"][:180] + ("…" if len(it["text"]) > 180 else "")
-                st.write(f"• para {it['para']} (y0={it['y0']:.1f}): {snip}")
-            doc.close()
-        except Exception as e:
-            st.warning(f"Preview failed: {e}")
-    
+            st.caption(f"Found {len(paras)} numbered paragraphs and {len(cases)} case studies.")
+            # ---- Paragraph preview ----
+            if paras:
+                n = st.number_input("Paragraph number", min_value=min(paras.keys()),
+                                     max_value=max(paras.keys()), value=min(paras.keys()), step=1)
+                p = paras.get(int(n))
+                if p:
+                    st.write(f"**Paragraph {int(n)} (page {p['page']})**")
+                    st.text(p["text"][:2500])
+            # ---- Case Study preview ----
+            if cases:
+                k = st.number_input("Case Study #", min_value=min(cases.keys()),
+                                     max_value=max(cases.keys()), value=min(cases.keys()), step=1,
+                                     key="cs_preview_new")
+                cs = cases.get(int(k), {})
+                if "prompt" in cs:
+                    st.write(f"**Case Study {int(k)} — prompt (page {cs['prompt']['page']})**")
+                    st.text(cs["prompt"]["text"][:2500])
+                if "note" in cs:
+                    st.write(f"**Case Study {int(k)} — note (page {cs['note']['page']})**")
+                    st.text(cs["note"]["text"][:2500])
+        else:
+            st.info("NEW parser is not available (file missing or parse error).")
+        
+        st.subheader("🔎 Parser check (dev)")
+        test_page = st.number_input("PDF page (1-based)", min_value=1, value=7, step=1)
+        if st.checkbox("Show paragraphs + case-section on this page"):
+            try:
+                doc = fitz.open("assets/EUCapML - Course Booklet.pdf")
+                p = doc.load_page(int(test_page) - 1)
+                para_items, case_starts = _extract_page_paragraphs(p)
+                st.write(f"Case starts on this page: {[c['case'] for c in case_starts] or '—'}")
+                for it in para_items[:15]:
+                    snip = it["text"][:180] + ("…" if len(it["text"]) > 180 else "")
+                    st.write(f"• para {it['para']} (y0={it['y0']:.1f}): {snip}")
+                doc.close()
+            except Exception as e:
+                st.warning(f"Preview failed: {e}")
+        
 # Main UI
 st.image("assets/logo.png", width=240)
 st.title("EUCapML Case Tutor")

@@ -9,7 +9,6 @@ import re
 import json
 import hashlib
 import pathlib
-import fitz  # PyMuPDF
 from typing import List, Dict, Tuple
 from urllib.parse import quote_plus, urlparse
 import numpy as np
@@ -252,6 +251,20 @@ def get_targets_for_app(parsed: Dict[str, dict]) -> Dict[str, str]:
 # ================================
 # END NEW PDF PARSER
 # ================================
+
+# ========= Parse the Course Booklet once (NEW parser) =========
+PDF_PATH = "assets/EUCapML - Course Booklet.pdf"
+
+@st.cache_data(show_spinner=False)
+def parse_booklet_new_parser(path: str):
+    return parse_pdf_all_from_path(path)
+
+try:
+    PARSED_BOOKLET = parse_booklet_new_parser(PDF_PATH)
+except Exception as e:
+    PARSED_BOOKLET = None
+    st.warning(f"NEW parser: could not parse booklet at {PDF_PATH}: {e}")
+# ==============================================================
 
 # ---------------- Embeddings ----------------
 @st.cache_resource(show_spinner=False)
@@ -1116,29 +1129,6 @@ def detect_case_numbers(text: str) -> list[int]:
     return out
 
 @st.cache_resource(show_spinner=False)
-def _scan_case_headers(pdf_path: str) -> dict[int, tuple[int, int]]:
-    """
-    Returns {case_number: (start_page_index, end_page_index)} by scanning page headers/titles.
-    Relies on strict 'Case/Case Study/Fall' matching to avoid picking up para numbers.
-    """
-    out = {}
-    try:
-        doc = fitz.open(pdf_path)
-    except Exception:
-        return out
-    current = None
-    for pno in range(len(doc)):
-        page = doc.load_page(pno)
-        blocks = page.get_text("blocks")
-        text = " ".join(b[4] for b in blocks if len(b) >= 5)
-        cs = detect_case_numbers(text)
-        if cs:
-            current = cs[0]
-            out.setdefault(current, [pno, pno])
-        elif current is not None:
-            out[current][1] = pno
-    doc.close()
-    return {k: (v[0], v[1]) for k, v in out.items()}
 
 def _median_or_default(xs, default=12.0):
     xs = [x for x in xs if isinstance(x, (int, float))]
@@ -1158,443 +1148,7 @@ def _dehyphenate_join(prev: str, curr: str) -> str:
         return prev + " " + curr
     return prev or curr
 
-def build_paragraphs_from_layout(page, heading_boost=1.25, gap_multiplier=1.2) -> list[str]:
-    """
-    Build paragraphs from PDF layout:
-      - use page.get_text("dict") to read blocks/lines/spans + coordinates
-      - compute median body font size & line height
-      - start a new paragraph on (a) large vertical gap, (b) heading-sized line, or (c) empty line
-    """
-    pd = page.get_text("dict")
-    lines = []
-    sizes = []
-    heights = []
-
-    for blk in pd.get("blocks", []):
-        if blk.get("type") != 0:
-            continue  # skip images etc.
-        for ln in blk.get("lines", []):
-            # line text from spans
-            spans = ln.get("spans", [])
-            text = "".join(s.get("text", "") for s in spans).strip()
-            if not text:
-                continue
-            y0, y1 = ln.get("bbox", [0, 0, 0, 0])[1:3]
-            mid = (y0 + y1) / 2.0
-            sz = _median_or_default([s.get("size", 0) for s in spans], default=12.0)
-            height = max(1.0, y1 - y0)
-            lines.append({"text": text, "mid": mid, "size": sz, "height": height})
-            sizes.append(sz)
-            heights.append(height)
-
-    if not lines:
-        # fall back to simple text if something goes wrong
-        raw = page.get_text("text").strip()
-        return [raw] if raw else []
-
-    # sort by vertical position (top to bottom)
-    lines.sort(key=lambda d: d["mid"])
-
-    body_size = _median_or_default(sizes, 12.0)
-    body_h = _median_or_default(heights, 12.0)
-    gap_thresh = body_h * gap_multiplier
-
-    paras = []
-    cur = ""
-    prev_mid = None
-    prev_size = None
-
-    for ln in lines:
-        txt, mid, sz = ln["text"], ln["mid"], ln["size"]
-        is_heading = sz >= body_size * heading_boost
-
-        # Decide if we should start a new paragraph
-        new_para = False
-        if prev_mid is not None:
-            if abs(mid - prev_mid) > gap_thresh:
-                new_para = True
-            elif is_heading or (prev_size and prev_size >= body_size * heading_boost):
-                new_para = True
-
-        if new_para:
-            if cur.strip():
-                paras.append(cur.strip())
-            cur = txt
-        else:
-            cur = _dehyphenate_join(cur, txt) if cur else txt
-
-        prev_mid, prev_size = mid, sz
-
-    if cur.strip():
-        paras.append(cur.strip())
-
-    return paras
-
-# ======== Anchor-based paragraph extraction (bold margin numbers) ========
-import statistics as stats
-
-ANCHOR_NUM_RE = re.compile(r"^\d{1,4}$")  # stand-alone number (1..9999)
-BOLD_TOKENS = ("bold", "black", "heavy", "semibold", "demi")  # font name heuristics
-
-def _is_bold_font(font_name: str) -> bool:
-    if not font_name:
-        return False
-    f = font_name.lower()
-    return any(tok in f for tok in BOLD_TOKENS)
-
-def _median(xs, default=12.0):
-    xs = [x for x in xs if isinstance(x, (int, float))]
-    return stats.median(xs) if xs else default
-
-def _page_lines_with_spans(page) -> list[dict]:
-    """Return lines with geometry and spans: [{'y0','y1','x0','x1','text','spans':[...]}]."""
-    d = page.get_text("dict")
-    out = []
-    for blk in d.get("blocks", []):
-        if blk.get("type") != 0:
-            continue
-        for ln in blk.get("lines", []):
-            spans = ln.get("spans", [])
-            txt = "".join(s.get("text", "") for s in spans).strip()
-            if not txt:
-                continue
-            x0, y0, x1, y1 = ln.get("bbox", [0, 0, 0, 0])
-            out.append({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "text": txt, "spans": spans})
-    out.sort(key=lambda L: (L["y0"], L["x0"]))
-    return out
-
-def _left_gutter_threshold(lines: list[dict]) -> float:
-    """Compute a dynamic left gutter threshold (points)."""
-    if not lines:
-        return 60.0
-    min_x = min(L["x0"] for L in lines)
-    # Many PDFs put margin numbers within ~30–60 pt from min_x
-    return min_x + 50.0
-
-def _find_para_number_anchors(lines: list[dict]) -> list[dict]:
-    """Find bold margin numbers that form paragraph anchors."""
-    gutter = _left_gutter_threshold(lines)
-    # Estimate a typical body font size to avoid tiny artifacts
-    sizes = []
-    for L in lines:
-        for s in L["spans"]:
-            sizes.append(s.get("size", 0))
-    body_size = _median(sizes, 11.0)
-
-    anchors = []
-    for L in lines:
-        # Require the whole line to be just a number (avoid 'Art 7 (1)' etc.)
-        if not ANCHOR_NUM_RE.match(L["text"]):
-            continue
-        if L["x0"] > gutter:
-            continue  # not in left gutter
-        # Consider line "bold" if a majority of its spans are bold-ish or larger than body
-        bold_votes = 0
-        for s in L["spans"]:
-            if _is_bold_font(s.get("font", "")) or s.get("size", 0) >= body_size * 1.05:
-                bold_votes += 1
-        if bold_votes < max(1, len(L["spans"]) // 2):
-            continue
-
-        anchors.append({
-            "para": int(L["text"]),
-            "y0": L["y0"],
-            "y1": L["y1"],
-            "x1": L["x1"],  # right edge of the number
-        })
-
-    # Deduplicate anchors that vertically overlap (sometimes numbers repeat as tiny artifacts)
-    anchors.sort(key=lambda a: (a["y0"], a["para"]))
-    dedup = []
-    for a in anchors:
-        if dedup and abs(a["y0"] - dedup[-1]["y0"]) < 2.0:
-            # keep the leftmost (already so), prefer the lower 'para' number if different
-            continue
-        dedup.append(a)
-    return dedup
-
-def _join_text(acc: str, piece: str) -> str:
-    if not acc:
-        return piece
-    if not piece:
-        return acc
-    if acc.endswith("-") and piece and piece[:1].islower():
-        # dehyphenate soft breaks
-        return acc[:-1] + piece
-    if acc.endswith((" ", "—", "–")) or piece.startswith((" ", "—", "–")):
-        return acc + piece
-    return acc + " " + piece
-
-# --- New: detect "Case Study N" (or "Case N") headings on their own line ---
-CASE_HEADING_RES = [
-    re.compile(r"(?im)^\s*Case\s*Study\s*(\d{1,4})\b"),
-    re.compile(r"(?im)^\s*Case\s*(\d{1,4})\b"),
-]
-
-def _body_left_threshold(lines: list[dict], gutter: float) -> float:
-    """
-    Estimate the left edge of the main text column as the median x0 of lines
-    that are clearly to the right of the left gutter.
-    """
-    xs = [L["x0"] for L in lines if L["x0"] > gutter + 5.0]
-    return float(stats.median(xs)) if xs else (gutter + 60.0)
-
-def _line_is_heading(L: dict, body_size: float) -> bool:
-    # treat as heading if majority of spans are bold-ish OR size is larger
-    spans = L.get("spans", [])
-    big = any(s.get("size", 0) >= body_size * 1.12 for s in spans)
-    bold = sum(1 for s in spans if _is_bold_font(s.get("font", ""))) >= max(1, len(spans)//2 or 1)
-    return big or bold
-
-def _find_case_heading_anchors(lines: list[dict]) -> list[dict]:
-    """
-    Returns [{'kind':'case','case':N,'y0':...,'y1':...,'x0':...,'x1':...}, ...]
-    ONLY when the line itself looks like a heading and starts with Case/Case Study.
-    """
-    # derive typical body size once
-    sizes = [s.get("size", 0) for L in lines for s in L.get("spans", [])]
-    body_size = float(stats.median(sizes)) if sizes else 11.0
-
-    anchors = []
-    for L in lines:
-        txt = L["text"]
-        # Fast precheck to avoid regex on every line
-        if not (txt.lower().startswith("case") or txt.lower().startswith(" case")):
-            continue
-        # Needs to look like a heading (font size/bold)
-        if not _line_is_heading(L, body_size):
-            continue
-        # Strict regex match at line start
-        case_no = None
-        for rx in CASE_HEADING_RES:
-            m = rx.match(txt)
-            if m:
-                case_no = int(m.group(1))
-                break
-        if case_no is None:
-            continue
-        anchors.append({
-            "kind": "case",
-            "case": case_no,
-            "y0": L["y0"], "y1": L["y1"],
-            "x0": L["x0"], "x1": L["x1"],
-        })
-
-    # de-dup case headings that overlap vertically (keep the first)
-    anchors.sort(key=lambda a: (a["y0"], a["case"]))
-    dedup = []
-    for a in anchors:
-        if dedup and abs(a["y0"] - dedup[-1]["y0"]) < 2.0:
-            continue
-        dedup.append(a)
-    return dedup
-
-def extract_paragraphs_by_anchors(page) -> list[dict]:
-    """
-    Build paragraph chunks anchored either by:
-    - bold, stand-alone left-gutter numbers (paragraph anchors), or
-    - a heading line that starts with "Case Study N" / "Case N" (case anchors).
-
-    Returns: [{'kind':'para','para':115,'case':None,'text':'...'}, {'kind':'case','case':14,'para':None,'text':'...'}, ...]
-    """
-    lines = _page_lines_with_spans(page)
-    if not lines:
-        raw = page.get_text("text").strip()
-        return [{"kind": "page", "para": None, "case": None, "text": raw}] if raw else []
-
-    # collect anchors
-    para_anchors = _find_para_number_anchors(lines)   # formerly _find_anchors
-    case_anchors = _find_case_heading_anchors(lines)
-
-    if not para_anchors and not case_anchors:
-        text = page.get_text("text").strip()
-        return [{"kind": "page", "para": None, "case": None, "text": text}] if text else []
-
-    # union & sort
-    # normalize shapes to common dict with 'kind' plus y0/y1/x0/x1
-    for a in para_anchors:
-        a["kind"] = "para"
-        a.setdefault("x0", a.get("x1", 0) - 4)  # safe default
-
-    anchors = case_anchors + para_anchors
-    anchors.sort(key=lambda a: (a["y0"], 0 if a["kind"] == "case" else 1))  # case before para if tied
-
-    # compute gutter and stable body column
-    gutter = _left_gutter_threshold(lines)
-    body_left = _body_left_threshold(lines, gutter)
-
-    out = []
-    # iterate anchor ranges
-    for i, a in enumerate(anchors):
-        y_top = a["y0"]
-        y_bot = anchors[i + 1]["y0"] if i + 1 < len(anchors) else float("inf")
-
-        if a["kind"] == "para":
-            # for numbered paragraphs, require line to be inside the main column
-            x_min = max(a["x1"] + 4.0, body_left - 2.0)
-            acc = ""
-            for L in lines:
-                if L["y0"] < y_top or L["y0"] >= y_bot:
-                    continue
-                if L["x1"] <= x_min:
-                    continue
-                acc = _join_text(acc, L["text"])
-            if acc.strip():
-                out.append({"kind": "para", "para": a["para"], "case": None, "text": acc.strip()})
-
-        else:  # "case" heading
-            # take the following paragraph(s) in the body column, skipping the heading line itself
-            x_min = body_left - 3.0
-            acc = ""
-            for L in lines:
-                if L["y0"] <= a["y1"] + 0.5 or L["y0"] >= y_bot:
-                    continue  # skip the heading line; stop at next anchor
-                if L["x1"] <= x_min:
-                    continue
-                acc = _join_text(acc, L["text"])
-            if acc.strip():
-                out.append({"kind": "case", "para": None, "case": a["case"], "text": acc.strip()})
-
-    return out
-
-
-# ======== /Anchor-based paragraph extraction ========
-# ---------------- PDF line access & typography helpers ----------------
-# ---------------- PDF line access & typography helpers ----------------
-ANCHOR_NUM_RE = re.compile(r"^\d{1,4}$")  # stand-alone number (1..9999)
-BOLD_TOKENS = ("bold", "black", "heavy", "semibold", "demi")  # font name heuristics
-CASE_LINE_RE = re.compile(r"(?im)^\s*Case\s*Study\s*(\d{1,4})\b")  # "Case Study N ..." at line start
-
-def _is_bold_font(font_name: str) -> bool:
-    if not font_name:
-        return False
-    f = font_name.lower()
-    return any(tok in f for tok in BOLD_TOKENS)
-
-def _median(xs, default=12.0):
-    xs = [x for x in xs if isinstance(x, (int, float))]
-    return stats.median(xs) if xs else default
-
-def _page_lines_with_spans(page) -> list[dict]:
-    """
-    Return sorted lines with geometry and spans:
-    [{'x0','y0','x1','y1','text','spans':[{'font','size','text',...}, ...]}]
-    """
-    d = page.get_text("dict")
-    out = []
-    for blk in d.get("blocks", []):
-        if blk.get("type") != 0:
-            continue
-        for ln in blk.get("lines", []):
-            spans = ln.get("spans", [])
-            txt = "".join(s.get("text", "") for s in spans).strip()
-            if not txt:
-                continue
-            x0, y0, x1, y1 = ln.get("bbox", [0, 0, 0, 0])
-            out.append({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "text": txt, "spans": spans})
-    out.sort(key=lambda L: (L["y0"], L["x0"]))
-    return out
-
-def _left_gutter_threshold(lines: list[dict]) -> float:
-    """Dynamic left gutter (points). Paragraph numbers typically sit left of this."""
-    if not lines:
-        return 60.0
-    min_x = min(L["x0"] for L in lines)
-    return min_x + 50.0
-
-def _body_left_threshold(lines: list[dict], gutter: float) -> float:
-    """
-    Left edge of main text column = median x0 of lines to the right of the gutter.
-    Ensures we only collect 'right-hand' paragraph text (not the margin).
-    """
-    xs = [L["x0"] for L in lines if L["x0"] > gutter + 5.0]
-    return float(stats.median(xs)) if xs else (gutter + 60.0)
-
-def _find_case_starts(lines: list[dict], gutter: float) -> list[dict]:
-    """
-    Return [{'case': N, 'y0': <line_top>, 'x0': <line_left>} ...] for lines that begin with
-    'Case Study N ...'. These are ordinary body lines (not separate headings).
-    """
-    starts = []
-    body_left = _body_left_threshold(lines, gutter)
-    for L in lines:
-        # Must be in the body column (avoid left-margin number column)
-        if L["x0"] <= body_left - 3.0:
-            continue
-        m = CASE_LINE_RE.match(L["text"])
-        if m:
-            starts.append({"case": int(m.group(1)), "y0": L["y0"], "x0": L["x0"]})
-    starts.sort(key=lambda d: d["y0"])
-    return starts
-
-# ---------------- Find bold left-gutter paragraph number anchors ----------------
-def _find_para_number_anchors(lines: list[dict]) -> list[dict]:
-    """
-    Return [{'para':115,'y0':..,'y1':..,'x1':..}, ...] for bold stand-alone numbers in left gutter.
-    """
-    gutter = _left_gutter_threshold(lines)
-    sizes = [s.get("size", 0) for L in lines for s in L.get("spans", [])]
-    body_size = _median(sizes, 11.0)
-
-    anchors = []
-    for L in lines:
-        if not ANCHOR_NUM_RE.match(L["text"]):
-            continue
-        if L["x0"] > gutter:
-            continue  # not in left gutter
-        # majority bold-ish or slightly larger than body
-        bold_votes = 0
-        for s in L["spans"]:
-            if _is_bold_font(s.get("font", "")) or s.get("size", 0) >= body_size * 1.05:
-                bold_votes += 1
-        if bold_votes < max(1, len(L["spans"]) // 2):
-            continue
-        anchors.append({"para": int(L["text"]), "y0": L["y0"], "y1": L["y1"], "x1": L["x1"]})
-
-    anchors.sort(key=lambda a: (a["y0"], a["para"]))
-    # de-dup vertical overlaps (pdf artifacts)
-    dedup = []
-    for a in anchors:
-        if dedup and abs(a["y0"] - dedup[-1]["y0"]) < 2.0:
-            continue
-        dedup.append(a)
-    return dedup
-
-def _extract_paragraph_items_for_page(page) -> tuple[list[dict], list[dict]]:
-    lines = _page_lines_with_spans(page)
-    if not lines:
-        return [], []
-
-    gutter = _left_gutter_threshold(lines)
-    body_left = _body_left_threshold(lines, gutter)
-
-    case_starts = _find_case_starts(lines, gutter)      # ← NEW
-    anchors     = _find_para_number_anchors(lines)
-    if not anchors:
-        return [], case_starts
-
-    items = []
-    for i, a in enumerate(anchors):
-        y_top = a["y0"]
-        y_bot = anchors[i + 1]["y0"] if i + 1 < len(anchors) else float("inf")
-        x_min = max(a["x1"] + 4.0, body_left - 2.0)
-        acc = ""
-        for L in lines:
-            if L["y0"] < y_top or L["y0"] >= y_bot:  # between anchors
-                continue
-            if L["x1"] <= x_min:                     # stay out of gutter
-                continue
-            if acc.endswith("-") and L["text"] and L["text"][:1].islower():
-                acc = acc[:-1] + L["text"]           # dehyphenate
-            else:
-                acc = (acc + " " + L["text"]).strip() if acc else L["text"]
-        if acc.strip():
-            items.append({"para": a["para"], "y0": y_top, "text": acc.strip()})
-
-    return items, case_starts
-
 # ============ Deterministic booklet parsing helpers ============
-
 # Accepts: "12", "12.", "12)", "12 –", "12 —" etc. at the **very start** of a line.
 LEAD_NUM_RE   = re.compile(r"^\s*(\d{1,4})(?:[.)]|\s*[-–—])?\s+")
 CASE_LINE_RE  = re.compile(r"^\s*Case\s*Study\s*(\d{1,4})\b", re.I)
@@ -1948,6 +1502,36 @@ with st.sidebar:
     
     # ---- Course Booklet diagnostics ----
     # ---- Tiny diagnostic to confirm parsing ----
+    with st.sidebar:
+    st.subheader("🔎 NEW parser sanity check")
+    if PARSED_BOOKLET:
+        paras = PARSED_BOOKLET["paragraphs"]      # {n: {"text","page"}}
+        cases = PARSED_BOOKLET["case_studies"]     # {n: {"prompt":{...},"note":{...}}}
+
+        st.caption(f"Found {len(paras)} numbered paragraphs and {len(cases)} case studies.")
+        # ---- Paragraph preview ----
+        if paras:
+            n = st.number_input("Paragraph number", min_value=min(paras.keys()),
+                                 max_value=max(paras.keys()), value=min(paras.keys()), step=1)
+            p = paras.get(int(n))
+            if p:
+                st.write(f"**Paragraph {int(n)} (page {p['page']})**")
+                st.text(p["text"][:2500])
+        # ---- Case Study preview ----
+        if cases:
+            k = st.number_input("Case Study #", min_value=min(cases.keys()),
+                                 max_value=max(cases.keys()), value=min(cases.keys()), step=1,
+                                 key="cs_preview_new")
+            cs = cases.get(int(k), {})
+            if "prompt" in cs:
+                st.write(f"**Case Study {int(k)} — prompt (page {cs['prompt']['page']})**")
+                st.text(cs["prompt"]["text"][:2500])
+            if "note" in cs:
+                st.write(f"**Case Study {int(k)} — note (page {cs['note']['page']})**")
+                st.text(cs["note"]["text"][:2500])
+    else:
+        st.info("NEW parser is not available (file missing or parse error).")
+    
     st.subheader("🔎 Parser check (dev)")
     test_page = st.number_input("PDF page (1-based)", min_value=1, value=7, step=1)
     if st.checkbox("Show paragraphs + case-section on this page"):

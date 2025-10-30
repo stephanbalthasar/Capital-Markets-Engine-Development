@@ -24,6 +24,235 @@ from bs4 import BeautifulSoup
 # ---------------- Build fingerprint (to verify latest deployment) ----------------
 APP_HASH = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:10]
 
+# ================================
+# BEGIN NEW PDF PARSER (do not edit)
+# ================================
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional, Union
+import re
+import fitz  # PyMuPDF
+
+# ---------- low-level: line reconstruction using layout ----------
+@dataclass
+class _Line:
+    y: float
+    items: List[Tuple[float, str]]  # (x0, text)
+
+    def text(self) -> str:
+        return "".join(t for _, t in sorted(self.items, key=lambda z: z[0]))
+
+def _iter_lines(page: fitz.Page, y_tol: float = 2.0) -> List[_Line]:
+    """
+    Build physical lines from blocks, preserving left/right positions.
+    """
+    blocks = page.get_text("blocks")  # (x0, y0, x1, y1, text, block_no, ...)
+    frags: List[Tuple[float, float, str]] = []
+    for b in blocks:
+        x0, y0, x1, y1, text, *_ = b
+        if not text:
+            continue
+        for raw in text.splitlines():
+            if raw.strip():
+                frags.append((x0, y0, raw))
+
+    # sort by y then x
+    frags.sort(key=lambda t: (round(t[1], 1), t[0]))
+
+    lines: List[_Line] = []
+    cur: Optional[_Line] = None
+    for x0, y0, t in frags:
+        if cur is None or abs(y0 - cur.y) > y_tol:
+            if cur:
+                lines.append(cur)
+            cur = _Line(y=y0, items=[(x0, t)])
+        else:
+            cur.items.append((x0, t))
+    if cur:
+        lines.append(cur)
+    return lines
+
+# ---------- detectors & text utilities ----------
+_NUM_RE_STRICT = re.compile(r"^\s*(\d{1,3})\s*[\.\)]?\s*$")   # e.g., "1", "1.", "(1)"
+_CASE_STUDY_RE = re.compile(r"^\s*Case Study\s+(\d+)\.?\s*", re.IGNORECASE)
+_WS_RE = re.compile(r"[ \t\u00A0]+")
+
+def _normalize_ws(s: str) -> str:
+    return _WS_RE.sub(" ", s or "").strip()
+
+def _line_has_left_number(line: _Line, left_cutoff: float = 70.0) -> Optional[int]:
+    """
+    Detects gutter paragraph numbers printed near the left margin.
+    """
+    if not line.items:
+        return None
+    # Examine the first 1-2 low-x items (sometimes a dash precedes the number)
+    for x0, txt in sorted(line.items, key=lambda z: z[0])[:2]:
+        if x0 > left_cutoff:
+            break
+        m = _NUM_RE_STRICT.match(txt.strip())
+        if m:
+            return int(m.group(1))
+    return None
+
+def _join_line_text_excluding_leading_number(line: _Line) -> str:
+    parts = [t for _, t in sorted(line.items, key=lambda z: z[0])]
+    if parts and _NUM_RE_STRICT.match(parts[0].strip()):
+        parts = parts[1:]  # drop the leading number token
+    elif len(parts) >= 2 and parts[0].strip() in {"-", "•", "–"} and _NUM_RE_STRICT.match(parts[1].strip()):
+        parts = parts[2:]
+    return _normalize_ws(" ".join(parts))
+
+def _join_line_text(line: _Line) -> str:
+    return _normalize_ws(" ".join(t for _, t in sorted(line.items, key=lambda z: z[0])))
+
+# ---------- core extractors ----------
+def _extract_paragraphs(doc: fitz.Document) -> Dict[int, Dict[str, Union[str, int]]]:
+    """
+    Returns: { para_number: {"text": str, "page": int} }
+    Combines left-gutter numbers with body text, spanning pages until next number appears.
+    """
+    results: Dict[int, Dict[str, Union[str, int]]] = {}
+    current_n: Optional[int] = None
+    buffer: List[str] = []
+    first_seen_page: Dict[int, int] = {}
+
+    def flush():
+        nonlocal current_n, buffer
+        if current_n is not None and buffer:
+            text = _normalize_ws(" ".join(buffer))
+            # Keep longest version if the same number is encountered twice
+            if current_n not in results or len(text) > len(results[current_n]["text"]):
+                results[current_n] = {"text": text, "page": first_seen_page[current_n]}
+        buffer = []
+
+    for pidx in range(len(doc)):
+        page = doc[pidx]
+        for line in _iter_lines(page):
+            n = _line_has_left_number(line)
+            if n is not None:
+                flush()
+                current_n = n
+                first_seen_page.setdefault(n, pidx + 1)
+                rest = _join_line_text_excluding_leading_number(line)
+                buffer = [rest] if rest else []
+                continue
+
+            if current_n is not None:
+                txt = _join_line_text(line)
+                if txt:
+                    buffer.append(txt)
+
+    flush()
+    return results
+def _extract_case_studies(doc: fitz.Document) -> Dict[int, Dict[str, Dict[str, Union[str, int]]]]:
+    """
+    Returns: { N: { "prompt": {"text": str, "page": int}, "note": {"text": str, "page": int} } }
+    - 'prompt' : the main Case Study on earlier pages
+    - 'note'   : the entry in section "8 CASE NOTES" (if present)
+    """
+    found: Dict[int, Dict[str, Dict[str, Union[str, int]]]] = {}
+
+    # pass 1: prompts
+    for pidx in range(len(doc)):
+        page = doc[pidx]
+        lines = _iter_lines(page)
+        i = 0
+        while i < len(lines):
+            t = lines[i].text()
+            m = _CASE_STUDY_RE.match(t)
+            if m:
+                n = int(m.group(1))
+                tail = t[m.end():].strip()
+
+                # gather subsequent lines until next Case Study or next clean paragraph number headline
+                buf = [tail] if tail else []
+                j = i + 1
+                while j < len(lines):
+                    s = lines[j].text().strip()
+                    if _CASE_STUDY_RE.match(s) or _NUM_RE_STRICT.match(s):
+                        break
+                    buf.append(s)
+                    j += 1
+
+                text = f"Case Study {n}. " + _normalize_ws(" ".join(buf))
+                found.setdefault(n, {})["prompt"] = {"text": text, "page": pidx + 1}
+                i = j
+                continue
+            i += 1
+
+    # pass 2: notes (after heading contains "CASE NOTES")
+    in_case_notes = False
+    for pidx in range(len(doc)):
+        page = doc[pidx]
+        if "CASE NOTES" in (page.get_text("text") or "").upper():
+            in_case_notes = True
+        if not in_case_notes:
+            continue
+
+        lines = _iter_lines(page)
+        i = 0
+        while i < len(lines):
+            t = lines[i].text().strip()
+            m = _CASE_STUDY_RE.match(t)
+            if m:
+                n = int(m.group(1))
+                buf = []
+                j = i + 1
+                while j < len(lines):
+                    s = lines[j].text().strip()
+                    if _CASE_STUDY_RE.match(s):
+                        break
+                    buf.append(s)
+                    j += 1
+                text = _normalize_ws(t + " " + " ".join(buf))
+                found.setdefault(n, {})["note"] = {"text": text, "page": pidx + 1}
+                i = j
+                continue
+            i += 1
+
+    return found
+
+# ---------- Public helpers you will call from the app ----------
+def parse_pdf_all_from_path(pdf_path: str) -> Dict[str, dict]:
+    """
+    Parse a PDF from a file path. Returns:
+    {
+      "paragraphs": {1: {"text":..., "page":...}, ...},
+      "case_studies": {1: {"prompt": {...}, "note": {...}}, ...}
+    }
+    """
+    doc = fitz.open(pdf_path)
+    paragraphs = _extract_paragraphs(doc)
+    cases = _extract_case_studies(doc)
+    return {"paragraphs": paragraphs, "case_studies": cases}
+
+def parse_pdf_all_from_bytes(pdf_bytes: bytes) -> Dict[str, dict]:
+    """
+    Parse a PDF from raw bytes (e.g., st.file_uploader).
+    """
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    paragraphs = _extract_paragraphs(doc)
+    cases = _extract_case_studies(doc)
+    return {"paragraphs": paragraphs, "case_studies": cases}
+
+def get_targets_for_app(parsed: Dict[str, dict]) -> Dict[str, str]:
+    """
+    Convenience for your tutor app: returns the 4 values you showed in your example.
+    """
+    paras = parsed["paragraphs"]
+    cases = parsed["case_studies"]
+    out = {
+        "para_1": paras.get(1, {}).get("text", ""),
+        "para_2": paras.get(2, {}).get("text", ""),
+    }
+    cs1 = cases.get(1, {})
+    out["case_study_1_prompt"] = (cs1.get("prompt") or {}).get("text", "")
+    out["case_study_1_note"]   = (cs1.get("note") or {}).get("text", "")
+    return out
+# ================================
+# END NEW PDF PARSER
+# ================================
+
 # ---------------- Embeddings ----------------
 @st.cache_resource(show_spinner=False)
 def load_embedder():

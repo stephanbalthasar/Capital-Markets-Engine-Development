@@ -6,3 +6,4 @@ scikit-learn
 sentence-transformers
 beautifulsoup4
 lxml
+pymupdf==1.24.*

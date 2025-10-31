@@ -1929,11 +1929,11 @@ with colA:
 
                 messages = [
                     {"role": "system", "content": system_guardrails()},
-                    {"role": "user", "content": hard_rule + build_feedback_prompt(
+                    {"role": "user", "content": prelude + hard_rule + build_feedback_prompt(
                         student_answer, rubric, model_answer_filtered, sources_block, excerpts_block
                     )},
                 ]
-
+                                
                 reply = generate_with_continuation(
                     messages, api_key, model_name=model_name, temperature=temp,
                     first_tokens=1200, continue_tokens=350
@@ -2033,7 +2033,6 @@ with colB:
                     first_tokens=1200, continue_tokens=350
                 )
                 
-                # ✅ Enforce global model-consistency in chat, too
                 reply = enforce_model_consistency(
                     reply,
                     model_answer_filtered,
@@ -2042,6 +2041,11 @@ with colB:
                     st.session_state.get("selected_question", "Question 1"),
                 )
 
+                msgs.append({"role": "system", "content":
+                    "When the student's view aligns with the MODEL ANSWER, avoid marking claims as incorrect; "
+                    "present extra provisions and edge cases under a short 'Suggestions' or 'Further Considerations' section."
+                })
+                
                 # cleanup + source filtering remain unchanged
                 reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
                 used_idxs = parse_cited_indices(reply)

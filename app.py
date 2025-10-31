@@ -754,38 +754,6 @@ def _find_section(text: str, title_regex: str):
         return None, None, None, None
     return m.group(1), m.group(2), m.group(3), m.span(0)
 
-
-def normalize_core_claim_labels(reply: str, force_all_correct: bool) -> str:
-    """
-    Inside 'Student's Core Claims:' block:
-    - If force_all_correct=True => flip any '(Incorrect|Not supported|Can be improved|…)' to '(Correct)'.
-    - Otherwise, allow only (Correct|Incorrect|Not supported). Map other tags to 'Not supported'.
-    """
-    if not reply:
-        return reply
-    import re
-    sec = re.search(
-        r"(Student's Core Claims:\s*)(.*?)(\n(?:Incorrect Claims:|Missing Aspects:|Suggestions:|Improvement Tips|Conclusion|📚|Sources used|$))",
-        reply,
-        flags=re.S | re.I,
-    )
-    if not sec:
-        return reply
-    head, block, tail = sec.group(1), sec.group(2), sec.group(3)
-
-    if force_all_correct:
-        block = re.sub(r"\(([^)]*)\)", "(Correct)", block)
-    else:
-        def repl(m):
-            tag = (m.group(1) or "").strip()
-            if tag in {"Correct", "Incorrect", "Not supported"}:
-                return f"({tag})"
-            return "(Not supported)"
-        block = re.sub(r"\(([^)]*)\)", repl, block)
-
-    return reply.replace(sec.group(0), head + block + tail)
-
-
 def _bulletize(text: str) -> list[str]:
     """
     Split a block into clean '• ...' bullets (preserves inline punctuation).
@@ -2162,7 +2130,6 @@ with colA:
                     model_name,
                 )
   
-                reply = normalize_core_claim_labels(reply, force_all_correct=agreement)
                 reply = merge_to_suggestions(reply, student_answer, activate=agreement)
                 reply = tidy_empty_sections(reply)
                 reply = prune_redundant_improvements(student_answer, reply)

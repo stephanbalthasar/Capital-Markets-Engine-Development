@@ -664,6 +664,116 @@ def detect_substantive_flags(answer: str) -> List[str]:
         flags.append("Delay under Art 17(4) MAR is conditional: (a) legitimate interest, (b) not misleading, (c) confidentiality ensured.")
     return flags
 
+# =======================
+# MODEL-CONSISTENCY GUARDRAIL (general, no question-specific logic)
+# =======================
+
+def _json_only(messages, api_key, model_name="llama-3.1-8b-instant", max_tokens=700):
+    """Calls Groq and returns JSON-parsed dict/list or None. Reuses call_groq + _try_parse_json present in your app."""
+    raw = call_groq(messages, api_key=api_key, model_name=model_name, temperature=0.0, max_tokens=max_tokens)
+    return _try_parse_json(raw)
+
+def check_reply_vs_model_for_contradictions(model_answer: str, reply: str, api_key: str, model_name: str) -> dict:
+    """
+    Structured 'consistency critic' that flags contradictions between ASSISTANT_REPLY and MODEL_ANSWER.
+    Returns: {"consistent": bool, "contradictions": [{"reply_span","model_basis","why","fix"}]}
+    """
+    if not api_key or not reply or not model_answer:
+        return {"consistent": True, "contradictions": []}
+
+    ma = truncate_block(model_answer, 3200)
+    rp = truncate_block(reply, 1800)
+
+    sys = (
+        "You are a strict checker. OUTPUT VALID JSON ONLY (no prose, no fences).\n"
+        "Task: Compare the ASSISTANT_REPLY to the AUTHORITATIVE_MODEL_ANSWER.\n"
+        "Identify statements in ASSISTANT_REPLY that contradict or materially diverge from the MODEL_ANSWER.\n"
+        "Focus on conclusions, rules, tests, thresholds, outcomes. Ignore style. If in doubt, prefer the MODEL_ANSWER."
+    )
+    user = (
+        "{"
+        "\"spec\":\"Return JSON: {\\\"consistent\\\":true|false, \\\"contradictions\\\":[{\\\"reply_span\\\":<=200c, \\\"model_basis\\\":<=200c, \\\"why\\\":<=120c, \\\"fix\\\":<=160c}]}\""
+        "}\n\n"
+        "AUTHORITATIVE_MODEL_ANSWER:\n\"\"\"\n" + ma + "\n\"\"\"\n\n"
+        "ASSISTANT_REPLY:\n\"\"\"\n" + rp + "\n\"\"\"\n"
+    )
+    parsed = _json_only(
+        [{"role": "system", "content": sys}, {"role": "user", "content": user}],
+        api_key, model_name=model_name, max_tokens=700
+    )
+    if not parsed or not isinstance(parsed, dict):
+        return {"consistent": True, "contradictions": []}
+
+    contrad = parsed.get("contradictions") or []
+    clean = []
+    for c in contrad:
+        if not isinstance(c, dict):
+            continue
+        rs = (c.get("reply_span") or "")[:220]
+        mb = (c.get("model_basis") or "")[:220]
+        wy = (c.get("why") or "")[:140]
+        fx = (c.get("fix") or "")[:180]
+        if rs and mb:
+            clean.append({"reply_span": rs, "model_basis": mb, "why": wy, "fix": fx})
+
+    return {"consistent": not bool(clean), "contradictions": clean}
+
+def rewrite_reply_to_match_model(model_answer: str, reply: str, contradictions: list, api_key: str, model_name: str) -> str:
+    """
+    Rewrites the reply to align with the MODEL_ANSWER.
+    Preserves structure, ≤400 words, keeps existing [n] citations but does NOT invent new numbers.
+    """
+    if not api_key or not reply or not model_answer:
+        return reply
+
+    ma = truncate_block(model_answer, 3200)
+    rp = truncate_block(reply, 1800)
+
+    report = "\n".join(
+        f"{i}. reply: {c.get('reply_span','')}\n   model: {c.get('model_basis','')}\n   fix: {c.get('fix','')}"
+        for i, c in enumerate(contradictions[:8], 1)
+    )
+
+    sys = (
+        "You are a careful editor. Rewrite ASSISTANT_REPLY so it does NOT contradict the AUTHORITATIVE_MODEL_ANSWER.\n"
+        "Keep ≤400 words, preserve structure/voice, and KEEP existing numeric bracket citations [n].\n"
+        "Do NOT invent new numbers; you may delete/relocate an inappropriate [n].\n"
+        "If the student is wrong per the model, state the correct conclusion first and explain briefly."
+    )
+    user = (
+        "AUTHORITATIVE_MODEL_ANSWER:\n\"\"\"\n" + ma + "\n\"\"\"\n\n"
+        "ASSISTANT_REPLY (to correct):\n\"\"\"\n" + rp + "\n\"\"\"\n\n"
+        "INCONSISTENCIES:\n" + report + "\n\n"
+        "OUTPUT ONLY the corrected reply text (no JSON, no preface)."
+    )
+
+    fixed = call_groq(
+        [{"role": "system", "content": sys}, {"role": "user", "content": user}],
+        api_key=api_key, model_name=model_name, temperature=0.1, max_tokens=900
+    )
+    return fixed or reply
+
+def enforce_model_consistency(reply: str, model_answer_filtered: str, api_key: str, model_name: str) -> str:
+    """
+    Detect → correct → (optionally) verify.
+    If LLM unavailable or nothing to fix, returns original reply.
+    """
+    if not reply:
+        return reply
+
+    check = check_reply_vs_model_for_contradictions(model_answer_filtered, reply, api_key, model_name)
+    if check.get("consistent", True):
+        return reply
+
+    corrected = rewrite_reply_to_match_model(
+        model_answer_filtered, reply, check.get("contradictions", []),
+        api_key, model_name
+    ) or reply
+
+    # Best-effort recheck; keep corrected either way
+    recheck = check_reply_vs_model_for_contradictions(model_answer_filtered, corrected, api_key, model_name)
+    return corrected if recheck.get("consistent", True) else corrected
+
 def summarize_rubric(student_answer: str, model_answer: str, backend, required_issues: List[Dict], weights: Dict):
     embs = embed_texts([student_answer, model_answer], backend)
     sim = cos_sim(embs[0], embs[1])
@@ -1015,8 +1125,17 @@ RULES:
 
 def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_block: str, excerpts_block: str) -> List[Dict]:
     msgs = [{"role": "system", "content": system_guardrails()}]
+
+    # --- Step 3: Hard rule to keep replies aligned with the MODEL ANSWER ---
+    msgs.append({"role": "system", "content":
+        "HARD RULE: Do not contradict the MODEL ANSWER. "
+        "If student reasoning conflicts, state the correct conclusion per the MODEL ANSWER and explain briefly."
+    })
+
     for m in chat_history[-8:]:
-        if m["role"] in ("user", "assistant"): msgs.append(m)
+        if m.get("role") in ("user", "assistant"):
+            msgs.append(m)
+
     # Pin authoritative context and sources
     msgs.append({"role": "system", "content": "MODEL ANSWER (authoritative):\n" + model_answer})
     msgs.append({"role": "system", "content": "SOURCES:\n" + sources_block})
@@ -1501,7 +1620,7 @@ with st.sidebar:
             st.exception(e)
     
     # ---- Course Booklet diagnostics ----
-    # ---- Tiny diagnostic to confirm parsing ----
+    # ---- Diagnostic to confirm parsing ----
     with st.sidebar:
         st.subheader("🔎 Parser check (dev)")
         test_page = st.number_input("PDF page (1-based)", min_value=1, value=7, step=1)
@@ -1517,7 +1636,17 @@ with st.sidebar:
                 doc.close()
             except Exception as e:
                 st.warning(f"Preview failed: {e}")
-        
+    
+    # ---- Diagnostic to confirm guardrail ----
+    with st.expander("🛡️ Consistency guardrail (dev)"):
+    chk = check_reply_vs_model_for_contradictions(model_answer_filtered, reply, api_key, model_name)
+    if chk.get("consistent", True):
+        st.write("✓ Reply is consistent with the MODEL_ANSWER.")
+    else:
+        st.write("⚠️ Contradictions detected and corrected:")
+        for c in chk.get("contradictions", []):
+            st.markdown(f"- **Reply:** {c['reply_span']}\n  \n  **Model:** {c['model_basis']}\n  \n  _Fix:_ {c['fix']}")
+    
 # Main UI
 st.image("assets/logo.png", width=240)
 st.title("EUCapML Case Tutor")
@@ -1593,14 +1722,31 @@ with colA:
                 sources_block = truncate_block(sources_block, 1200)
                 excerpts_block = truncate_block(excerpts_block, 3200)
             
+                # --- Step 3: Hard rule that the reply must not contradict the model answer ---
+                hard_rule = (
+                    "HARD RULE: Do not contradict the MODEL ANSWER. "
+                    "If student reasoning conflicts, state the correct conclusion per the MODEL ANSWER and explain briefly.\n\n"
+                )
+
                 messages = [
                     {"role": "system", "content": system_guardrails()},
-                    {"role": "user", "content": build_feedback_prompt(student_answer, rubric, model_answer_filtered, sources_block, excerpts_block)},
+                    {"role": "user", "content": hard_rule + build_feedback_prompt(
+                        student_answer, rubric, model_answer_filtered, sources_block, excerpts_block
+                    )},
                 ]
-            
-                reply = generate_with_continuation(messages, api_key, model_name=model_name, temperature=temp,
-                                   first_tokens=1200, continue_tokens=350)
 
+                reply = generate_with_continuation(
+                    messages, api_key, model_name=model_name, temperature=temp,
+                    first_tokens=1200, continue_tokens=350
+                )
+
+                reply = enforce_model_consistency(
+                    reply,
+                    model_answer_filtered,
+                    api_key,
+                    model_name,
+                )
+                
                 if reply:
                     # Safety net: strip any stray “[n]” placeholders
                     reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
@@ -1687,6 +1833,21 @@ with colB:
                     msgs, api_key, model_name=model_name, temperature=temp,
                     first_tokens=1200, continue_tokens=350
                 )
+                
+                # ✅ Enforce global model-consistency in chat, too
+                reply = enforce_model_consistency(
+                    reply,
+                    model_answer_filtered,
+                    api_key,
+                    model_name,
+                    st.session_state.get("selected_question", "Question 1"),
+                )
+
+                # cleanup + source filtering remain unchanged
+                reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
+                used_idxs = parse_cited_indices(reply)
+                msg_sources = filter_sources_by_indices(source_lines, used_idxs) or source_lines[:]
+            
             else:
                 reply = None
             if not reply:

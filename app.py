@@ -72,7 +72,15 @@ def _iter_lines(page: fitz.Page, y_tol: float = 2.0) -> List[_Line]:
 
 # ---------- detectors & text utilities ----------
 _NUM_RE_STRICT = re.compile(r"^\s*(\d{1,3})\s*[\.\)]?\s*$")   # e.g., "1", "1.", "(1)"
-_CASE_STUDY_RE = re.compile(r"^\s*Case Study\s+(\d+)\.?\s*", re.IGNORECASE)
+_CASE_STUDY_RE = re.compile(
+    r"""^\s*
+        (?:[-•–]\s*)?               # optional bullet at line start
+        (?:\[\**\s*)?               # optional '[' and/or '**' used in Case Notes formatting
+        Case\s*Study\s+(\d{1,4})    # 'Case Study' + number
+        \.?\s*                      # optional trailing dot before the text
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 _WS_RE = re.compile(r"[ \t\u00A0]+")
 
 def _normalize_ws(s: str) -> str:
@@ -1491,7 +1499,14 @@ def _dehyphenate_join(prev: str, curr: str) -> str:
 # ============ Deterministic booklet parsing helpers ============
 # Accepts: "12", "12.", "12)", "12 –", "12 —" etc. at the **very start** of a line.
 LEAD_NUM_RE   = re.compile(r"^\s*(\d{1,4})(?:[.)]|\s*[-–—])?\s+")
-CASE_LINE_RE  = re.compile(r"^\s*Case\s*Study\s*(\d{1,4})\b", re.I)
+CASE_LINE_RE = re.compile(
+    r"""^\s*
+        (?:[-•–]\s*)?               # optional bullet
+        (?:\[\**\s*)?               # optional '[' / '**' (Case Notes formatting)
+        Case\s*Study\s*(\d{1,4})\b
+    """,
+    re.I | re.VERBOSE,
+)
 
 from typing import Optional
 
@@ -1719,30 +1734,45 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
     doc.close()
     return chunks, metas
 
-
 def format_manual_citation(meta: dict) -> str:
-    paras = meta.get("paras") or []
-    cases = meta.get("cases") or []
-    page_label = meta.get("page_label") or ""
-    pdf_p = meta.get("page_num")
+    """
+    Build a clean, human-readable citation line for the Course Booklet.
 
-    para_anchor = f"para. {paras[0]}" if paras else ""
-    case_anchor = f"Case Study {cases[0]}" if cases else ""
+    Rules:
+    - Always print page info first: "page <label> (PDF <n>)"
+    - If this chunk belongs to a Case Study, add "Case Study N" even for
+      non-headline paragraphs (via case_section fallback).
+    - If no case applies, but we have a paragraph number, append "para. N".
+    """
+    paras      = meta.get("paras") or []
+    cases      = meta.get("cases") or []
+    case_sec   = meta.get("case_section")  # enclosing Case Study (int) or None
+    page_label = meta.get("page_label") or ""
+    pdf_p      = meta.get("page_num")
 
     anchors = []
-    if case_anchor:
-        anchors.append(case_anchor)
+
+    # Page anchor
     if page_label or pdf_p:
         if page_label and pdf_p:
-            anchors.append(f"p. {page_label} (PDF {pdf_p})")
+            anchors.append(f"page {page_label} (PDF {pdf_p})")
         elif page_label:
-            anchors.append(f"p. {page_label}")
+            anchors.append(f"page {page_label}")
         else:
             anchors.append(f"PDF {pdf_p}")
-    if para_anchor:
-        anchors.append(para_anchor)
+    else:
+        anchors.append("PDF page ?")
 
-    return "Course Booklet — " + (", ".join(anchors) if anchors else "(no page anchor found)")
+    # Case anchor: prefer explicit case on the chunk, else enclosing section
+    case_n = cases[0] if cases else (case_sec if isinstance(case_sec, int) else None)
+    if case_n:
+        anchors.append(f"Case Study {case_n}")
+
+    # Paragraph anchor only if we don't already have a Case Study tag
+    if paras and not case_n:
+        anchors.append(f"para. {paras[0]}")
+
+    return "Course Booklet — " + ", ".join(anchors)
 
 # ---- Simple page cleaner for booklet parsing ----
 def clean_page_text(t: str) -> str:

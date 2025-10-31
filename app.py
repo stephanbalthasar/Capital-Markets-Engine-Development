@@ -1250,17 +1250,19 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
     manual_chunks, manual_metas = [], []
     try:
         _model_anchors = _anchors_from_model(model_answer_filtered)
-        if _model_anchors:
-            alow = [a.lower() for a in _model_anchors]
-            mc2, mm2 = [], []
-            for ch, meta in zip(manual_chunks, manual_metas):
-                txt = (ch or "").lower()
-                if any(a in txt for a in alow):
-                    mc2.append(ch); mm2.append(meta)
-            if mc2:
-                manual_chunks, manual_metas = mc2, mm2
-        except Exception:
-            pass
+    except Exception as _e:
+        _model_anchors = []
+    if _model_anchors:
+        alow = [a.lower() for a in _model_anchors]
+        mc2, mm2 = [], []
+        for ch, meta in zip(manual_chunks, manual_metas):
+            txt = (ch or "").lower()
+            if any(a in txt for a in alow):
+                mc2.append(ch)
+                mm2.append(meta)
+        if mc2:  # only shrink corpus if we keep something
+            manual_chunks, manual_metas = mc2, mm2    
+                                      
     try:
         manual_chunks, manual_metas = extract_manual_chunks_with_refs(
             "assets/EUCapML - Course Booklet.pdf",

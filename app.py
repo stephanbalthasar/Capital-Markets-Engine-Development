@@ -220,6 +220,21 @@ def _extract_case_studies(doc: fitz.Document) -> Dict[int, Dict[str, Dict[str, U
     return found
 
 # ---------- Public helpers you will call from the app ----------
+def _anchors_from_model(model_answer_slice: str, cap: int = 20) -> list[str]:
+    s = model_answer_slice or ""
+    acr = re.findall(r"\b[A-ZÄÖÜ]{2,6}\b", s)                        # MAR, PR, TD, WpHG, ...
+    art = re.findall(r"(?i)\b(?:Art\.?|Article)\s*\d+(?:\([^)]+\))*", s)
+    par = re.findall(r"§\s*\d+[a-z]?(?:\([^)]+\))*", s)
+    # de‑duplicate, keep by original order
+    seen, out = set(), []
+    for t in acr + art + par:
+        t = re.sub(r"\s+", " ", t.strip())
+        if t and t not in seen:
+            seen.add(t); out.append(t)
+        if len(out) >= cap:
+            break
+    return out
+
 def prune_redundant_improvements(student_answer: str, reply: str) -> str:
     """
     Remove bullets that recommend adding content clearly present in the student's answer.
@@ -860,6 +875,115 @@ def tidy_empty_sections(reply: str) -> str:
                    "", reply, flags=re.S | re.I)
     return reply
 
+# --- High‑recall presence detector for legal cites in the student's answer ---
+def _presence_set(student_answer: str, model_answer_slice: str) -> set[str]:
+    """
+    Build a set of 'present' markers we will trust for removing hallucinated 'missing'.
+    We collect both: (1) patterns found in the MODEL ANSWER (acronyms, Art/§ cites, C‑numbers),
+    and (2) their occurrences in the student's answer (case‑insensitive, hyphen tolerant).
+    """
+    ans = (student_answer or "")
+    ma  = (model_answer_slice or "")
+
+    # 1) pull potential anchors from the model answer (generic, no hard-coding to a domain)
+    acronyms = set(re.findall(r"\b[A-ZÄÖÜ]{2,6}\b", ma))           # MAR, PR, TD, WpHG, WpÜG, etc.
+    art_refs = set(re.findall(r"\b(?:Art\.?|Article)\s*\d+(?:\([^)]+\))*", ma, flags=re.I))
+    par_refs = set(re.findall(r"§\s*\d+[a-z]?(?:\([^)]+\))*", ma))
+    c_cases  = set(re.findall(r"C[\-‑–/]\s*\d+\s*/\s*\d+", ma))     # C-628/13, C‑628/13, etc.
+    names    = set(re.findall(r"\b[Ll]afonta\b|\b[Gg]eltl\b|\b[Hh]ypo\s+Real\s+Estate\b", ma))
+
+    # 2) normalise and build search patterns (tolerate dashed/non-breaking hyphen variants)
+    def norm(x: str) -> str:
+        x = re.sub(r"\s+", " ", x.strip())
+        return x
+
+    raw_markers = {norm(x) for x in (acronyms | art_refs | par_refs | c_cases | names) if x}
+    if not raw_markers:
+        return set()
+
+    # helper: hyphen-flexible pattern for ECJ case numbers
+    def hyflex(s: str) -> str:
+        s = re.escape(s)
+        # make all hyphens flexible; allow NBSP in "C‑628/13" variants
+        s = s.replace(r"C\-", r"C[\-‑–]?").replace(r"\s*/\s*", r"\s*/\s*")
+        return s
+
+    present = set()
+    for m in raw_markers:
+        pat = hyflex(m)
+        if re.search(pat, ans, flags=re.I):
+            present.add(m.lower())
+
+        # also handle relaxed variants for Art/Article, strip spaces like "Art 7(2)"
+        if re.match(r"(?i)^(art\.?|article)\s*\d", m):
+            simple = re.sub(r"(?i)^(art\.?|article)\s*", "", m)
+            if re.search(rf"(?i)\b(art\.?|article)\s*{re.escape(simple)}\b", ans):
+                present.add(m.lower())
+
+    return present
+
+
+def format_feedback_and_filter_missing(reply: str,
+                                       student_answer: str,
+                                       model_answer_slice: str,
+                                       rubric: dict) -> str:
+    """
+    1) Ensure headings have a blank line after them.
+    2) Standardise core-claim bullets to: '• <claim> — [Correct]'.
+    3) Remove any 'Missing Aspects' bullet that mentions a concept we found in the student's answer.
+    4) Keep 'Suggestions/Improvement Tips' bullets strictly under their headings.
+    """
+    if not reply:
+        return reply
+
+    # --- 1) Headings on their own line
+    for h in [r"Student's Core Claims:", r"Missing Aspects:", r"Improvement Tips", r"Suggestions:", r"Conclusion:"]:
+        reply = re.sub(rf"(?im)^\s*{re.escape(h)}\s*", f"{h}\n", reply)
+
+    # --- 2) Reformat claim bullets: put the tag at the end, never touching parentheses in cites
+    m = re.search(r"(?is)(Student's Core Claims:\s*)(.*?)(\n(?:Missing Aspects:|Improvement Tips|Suggestions:|Conclusion:|$))", reply)
+    if m:
+        head, body, tail = m.group(1), m.group(2), m.group(3)
+        lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+        fixed = []
+        for ln in lines:
+            ln = re.sub(r"^\s*(?:•|-|\*)\s*", "• ", ln)
+            # cases:
+            #  a) "• Correct: text"  -> "• text — [Correct]"
+            m1 = re.match(r"^\s*•\s*(Correct|Incorrect|Not supported)\s*:?\s*(.+)$", ln, flags=re.I)
+            #  b) "• [Correct] text" -> "• text — [Correct]"
+            m2 = re.match(r"^\s*•\s*\[(Correct|Incorrect|Not supported)\]\s*(.+)$", ln, flags=re.I)
+            if m1:
+                tag, text = m1.group(1).capitalize(), m1.group(2).strip()
+                fixed.append(f"• {text} — [{tag}]")
+            elif m2:
+                tag, text = m2.group(1).capitalize(), m2.group(2).strip()
+                fixed.append(f"• {text} — [{tag}]")
+            else:
+                # default tag if the model forgot one
+                fixed.append(f"• {re.sub(r'^\s*•\s*', '', ln)} — [Not supported]")
+        reply = reply.replace(m.group(0), head + "\n".join(fixed) + tail)
+
+    # --- 3) Remove hallucinated 'Missing Aspects' (present in student's answer)
+    present = _presence_set(student_answer, model_answer_slice)
+    head, body, tail, span = _find_section(reply, r"Missing Aspects:")
+    if head:
+        bullets = _bulletize(body)
+        kept = []
+        for b in bullets:
+            low = b.lower()
+            # drop bullet if any present marker appears verbatim inside it
+            if any(p in low for p in present):
+                continue
+            kept.append(b)
+        reply = reply.replace(head + body + tail, head + ("\n".join(kept) + "\n" if kept else "—\n") + tail)
+
+    # --- 4) Keep 'Suggestions/Improvement Tips' content strictly under headings (collapse stray lists)
+    # If there's 'Suggestions:' ensure any bullet block between 'Suggestions:' and the next heading is inside that section.
+    # Already handled by your renderer; we only tidy spacing here.
+    reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
+    return reply
+
 # =======================
 # MODEL-CONSISTENCY GUARDRAIL (general, no question-specific logic)
 # =======================
@@ -1124,6 +1248,19 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
                                       
     # ---- Load & chunk Course Booklet with page/para/case metadata
     manual_chunks, manual_metas = [], []
+    try:
+        _model_anchors = _anchors_from_model(model_answer_filtered)
+        if _model_anchors:
+            alow = [a.lower() for a in _model_anchors]
+            mc2, mm2 = [], []
+            for ch, meta in zip(manual_chunks, manual_metas):
+                txt = (ch or "").lower()
+                if any(a in txt for a in alow):
+                    mc2.append(ch); mm2.append(meta)
+            if mc2:
+                manual_chunks, manual_metas = mc2, mm2
+        except Exception:
+            pass
     try:
         manual_chunks, manual_metas = extract_manual_chunks_with_refs(
             "assets/EUCapML - Course Booklet.pdf",
@@ -2135,6 +2272,7 @@ with colA:
                 reply = prune_redundant_improvements(student_answer, reply)
                 reply = lock_out_false_missing(reply, rubric)
                 reply = enforce_feedback_template(reply)
+                eply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)
                 
                 if reply:
                     # Safety net: strip any stray “[n]” placeholders

@@ -1067,6 +1067,7 @@ def system_guardrails():
         "- Do NOT fabricate page/para/case numbers.\n"
         "- Do not cite any material that does not appear in the SOURCES list.\n\n"
         "FEEDBACK PRINCIPLES:\n"
+        "- If the student's answer substantially aligns with the MODEL ANSWER, do not mark core claims as incorrect; prefer 'Correct' and offer improvements."
         "- If the student's conclusion is incorrect, explicitly state the correct conclusion first, then explain why with citations [n].\n"
         "- If the student's answer is irrelevant to the selected question, say: 'Are you sure your answer corresponds to the question you selected?'\n"
         "- If central concepts are missing, point this out and explain why they matter.\n"
@@ -1110,7 +1111,7 @@ EXCERPTS (quote sparingly; cite using [1], [2], …):
 {excerpts_block}
 
 TASK (you MUST follow these steps):
-1) Extract the student's core CLAIMS as short bullets (no more than 3–5 bullets). For EACH claim, give it one of the labels "Correct" / "Incorrect" / "Not supported".
+1) Extract the student's core CLAIMS as short bullets (no more than 3–5 bullets). For EACH claim, give it one of the labels "Correct" (if it aligns with the MODEL ANSWER) / "Incorrect" (if it contradicts the MODEL ANSWER) / "Can be improved" (in all other cases).
 2) Where you label a student core claim as incorrect, explain briefly why.
 3) Where important aspects are missing, explain what aspects are missing, and why they are important. 
 4) Give concise IMPROVEMENT TIPS (1–3 bullets) tied to the rubric issues, ideally with a numeric citation.

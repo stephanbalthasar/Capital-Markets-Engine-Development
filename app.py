@@ -1294,7 +1294,7 @@ EXCERPTS (quote sparingly; cite using [1], [2], …):
 {excerpts_block}
 
 TASK (you MUST follow these steps):
-1) Extract the student's core CLAIMS as short bullets (no more than 3–5 bullets). For EACH claim, give it one of the labels "Correct" (if it aligns with the MODEL ANSWER) / "Incorrect" (if it contradicts the MODEL ANSWER) / "Can be improved" (in all other cases).
+1) Extract the student's core CLAIMS ... give it one of the labels "Correct" (if it aligns with the MODEL ANSWER) / "Incorrect" (if it contradicts the MODEL ANSWER) / "Not supported" (in all other cases).
 2) Where you label a student core claim as incorrect, explain briefly why.
 3) Where important aspects are missing, explain what aspects are missing, and why they are important. 
 4) Give concise IMPROVEMENT TIPS (1–3 bullets) tied to the rubric issues, ideally with a numeric citation.
@@ -1945,6 +1945,10 @@ with colA:
                     api_key,
                     model_name,
                 )
+  
+                reply = normalize_core_claim_labels(reply, force_all_correct=agreement)
+                reply = merge_to_suggestions(reply, student_answer, activate=agreement)
+                reply = tidy_empty_sections(reply)
                 
                 if reply:
                     # Safety net: strip any stray “[n]” placeholders

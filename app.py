@@ -1639,7 +1639,7 @@ with st.sidebar:
     
     # ---- Diagnostic to confirm guardrail ----
     with st.expander("🛡️ Consistency guardrail (dev)"):
-    chk = check_reply_vs_model_for_contradictions(model_answer_filtered, reply, api_key, model_name)
+        chk = check_reply_vs_model_for_contradictions(model_answer_filtered, reply, api_key, model_name)
     if chk.get("consistent", True):
         st.write("✓ Reply is consistent with the MODEL_ANSWER.")
     else:

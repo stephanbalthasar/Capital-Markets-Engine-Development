@@ -212,6 +212,43 @@ def _extract_case_studies(doc: fitz.Document) -> Dict[int, Dict[str, Dict[str, U
     return found
 
 # ---------- Public helpers you will call from the app ----------
+def prune_redundant_improvements(student_answer: str, reply: str) -> str:
+    """
+    Remove bullets that recommend adding content clearly present in the student's answer.
+    Uses simple anchor regexes to detect presence.
+    """
+    if not reply:
+        return reply
+    import re
+    anchors = [
+        r"\bLafonta\b",
+        r"\bArt(?:icle)?\s*7\s*\(\s*2\s*\)\b",
+        r"\breasonably\s+be\s+expected\s+to\s+occur\b",
+        r"\bArt(?:icle)?\s*7\s*\(\s*4\s*\)\b",
+        r"\bArt(?:icle)?\s*17\s*\(\s*1\s*\)\b",
+        r"\bArt(?:icle)?\s*17\s*\(\s*4\s*\)\b",
+    ]
+    stu = student_answer.lower()
+
+    def present(pat: str) -> bool:
+        return re.search(pat, stu, flags=re.I) is not None
+
+    m = re.search(r"(Can be Improved:|Missing Aspects:|Suggestions:\s*)(.*?)(\n(?:Improvement Tips|Conclusion|📚|Sources used|$))",
+                  reply, flags=re.S | re.I)
+    if not m:
+        return reply
+
+    head, block, tail = m.group(1), m.group(2), m.group(3)
+    lines = [ln for ln in re.split(r"\n\s*•\s*", block.strip()) if ln.strip()]
+    kept = []
+    for ln in lines:
+        # Drop bullet if any anchor it references is already present in student answer
+        if any(re.search(p, ln, re.I) and present(p) for p in anchors):
+            continue
+        kept.append(f"• {ln.strip()}")
+    new_block = ("\n".join(kept) + "\n") if kept else "—\n"
+    return reply.replace(m.group(0), head + new_block + tail)
+
 def parse_pdf_all_from_path(pdf_path: str) -> Dict[str, dict]:
     """
     Parse a PDF from a file path. Returns:
@@ -1949,6 +1986,7 @@ with colA:
                 reply = normalize_core_claim_labels(reply, force_all_correct=agreement)
                 reply = merge_to_suggestions(reply, student_answer, activate=agreement)
                 reply = tidy_empty_sections(reply)
+                reply = prune_redundant_improvements(student_answer, reply)
                 
                 if reply:
                     # Safety net: strip any stray “[n]” placeholders

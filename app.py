@@ -1642,6 +1642,40 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
         page_label = page.get_label() or str(pno + 1)
 
         para_items, case_starts = _extract_page_paragraphs(page)
+        # --- NEW: build explicit case-chunks (prompts / case notes) on this page ---
+        # We slice from each "Case Study N" line to the next "Case Study ..." line.
+        lines = _page_lines_with_spans(page)
+        body_left = _body_left_threshold(lines)
+
+        # Collect segments for each case start detected on this page
+        for k, cs in enumerate(sorted(case_starts, key=lambda d: d["y0"])):
+            y0 = cs["y0"]
+            y1 = case_starts[k + 1]["y0"] if k + 1 < len(case_starts) else float("inf")
+
+            seg_lines = []
+            for L in lines:
+                # Keep only body-column text between y0..y1 (ignore left-gutter numbers)
+                if L["y0"] >= y0 - 0.2 and L["y0"] < y1 - 0.2 and L["x0"] >= body_left - 3.0:
+                    t = (L.get("text") or "").strip()
+                    if t:
+                        seg_lines.append(t)
+
+            seg_text = _normalize_ws(" ".join(seg_lines))
+            # Basic sanity: keep only if it begins with "Case Study N" and has some tail text
+            if not seg_text or not re.match(r"^\s*Case\s*Study\s*{}\b".format(cs["case"]), seg_text, flags=re.I):
+                continue
+
+            chunks.append(seg_text)
+            metas.append({
+                "pdf_index": pno,
+                "page_label": page_label,
+                "page_num": pno + 1,
+                "paras": [],                  # <-- no paragraph number for case chunks
+                "cases": [cs["case"]],        # <-- cite as “Case Study N”
+                "case_section": cs["case"],   # keep the enclosing section too
+                "file": "EUCapML - Course Booklet.pdf",
+                "kind": "case",               # optional tag (may help future filtering)
+            })
         # walk down the page; whenever a case start appears above the paragraph, update section
         case_idx = 0
         case_starts = sorted(case_starts, key=lambda d: d["y0"])

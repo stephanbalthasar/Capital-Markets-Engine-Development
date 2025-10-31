@@ -1639,25 +1639,25 @@ with st.sidebar:
     
     # ---- Diagnostic to confirm guardrail ----
     with st.expander("🛡️ Consistency guardrail (dev)", expanded=False):
-    # Try the most recent feedback first; fall back to chat
-    r = st.session_state.get("last_feedback_reply") or st.session_state.get("last_chat_reply")
-    ma = st.session_state.get("last_model_answer_filtered")
-    if not r or not ma:
-        st.write("— no reply/model captured yet —")
-    elif "check_reply_vs_model_for_contradictions" not in globals():
-        st.write("— guardrail helpers not loaded —")
-    else:
-        chk = check_reply_vs_model_for_contradictions(ma, r, api_key, model_name)
-        if chk.get("consistent", True):
-            st.write("✓ Reply is consistent with the MODEL_ANSWER.")
+        # Try the most recent feedback first; fall back to chat
+        r = st.session_state.get("last_feedback_reply") or st.session_state.get("last_chat_reply")
+        ma = st.session_state.get("last_model_answer_filtered")
+        if not r or not ma:
+            st.write("— no reply/model captured yet —")
+        elif "check_reply_vs_model_for_contradictions" not in globals():
+            st.write("— guardrail helpers not loaded —")
         else:
-            st.write("⚠️ Contradictions detected (and will be corrected in UI):")
-            for c in chk.get("contradictions", []):
-                st.markdown(
-                    f"- **Reply:** {c.get('reply_span','')}\n\n"
-                    f"  **Model:** {c.get('model_basis','')}\n\n"
-                    f"  _Fix:_ {c.get('fix','')}"
-                )
+            chk = check_reply_vs_model_for_contradictions(ma, r, api_key, model_name)
+            if chk.get("consistent", True):
+                st.write("✓ Reply is consistent with the MODEL_ANSWER.")
+            else:
+                st.write("⚠️ Contradictions detected (and will be corrected in UI):")
+                for c in chk.get("contradictions", []):
+                    st.markdown(
+                        f"- **Reply:** {c.get('reply_span','')}\n\n"
+                        f"  **Model:** {c.get('model_basis','')}\n\n"
+                        f"  _Fix:_ {c.get('fix','')}"
+                    )
         
 # Main UI
 st.image("assets/logo.png", width=240)

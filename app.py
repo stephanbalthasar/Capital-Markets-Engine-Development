@@ -1301,6 +1301,8 @@ def system_guardrails():
         "- If central concepts are missing, point this out and explain why they matter.\n"
         "- Correct mis-citations succinctly (e.g., Art 3(1) PR → Art 3(3) PR; §40 WpHG → §43(1) WpHG).\n"
         "- Summarize or paraphrase concepts; do not copy long passages.\n\n"
+        "FACT-CHECKING RULE:\\n"
+        "- Do **not** mark something as 'Missing' if it appears in the PRESENT list provided in the prompt.\\n\\n"
         "STYLE:\n"
         "- Be concise, didactic, and actionable.\n"
         "- Use ≤400 words, no new sections.\n"
@@ -1308,12 +1310,44 @@ def system_guardrails():
         "- Write in the same language as the student's answer when possible (if mixed, default to English)."
     )
 
+def _flatten_hits_misses_from_rubric(rubric: dict) -> tuple[list[str], list[str]]:
+    """
+    From the computed rubric, extract:
+    - present_keywords: every keyword we *deterministically* detected in the student's answer
+    - missing_keywords: every keyword we *did not* detect (flattened from rubric['missing'])
+    Both lists are lowercased and de-duplicated.
+    """
+    present = []
+    for row in (rubric or {}).get("per_issue", []):
+        present.extend(row.get("keywords_hit", []))
+    missing = []
+    for m in (rubric or {}).get("missing", []):
+        missing.extend(m.get("missed_keywords", []))
+
+    # Normalise / dedupe
+    norm = lambda s: re.sub(r"\s+", " ", (s or "").strip()).lower()
+    present = list(dict.fromkeys(norm(k) for k in present if k))
+    missing = list(dict.fromkeys(norm(k) for k in missing if k))
+
+    # Keep lists reasonably short for the prompt
+    return present[:30], missing[:30]
+
+
 def build_feedback_prompt(student_answer: str,
                           rubric: dict,
                           model_answer: str,
                           sources_block: str,
                           excerpts_block: str) -> str:
+    """
+    STRICT prompt: we feed the LLM our deterministic 'present'/'missing' signals
+    and require it NOT to claim something is missing if we've detected it.
+    We also give a compact output template to avoid redundancy.
+    """
     issue_names = [row["issue"] for row in rubric.get("per_issue", [])]
+    present, missing = _flatten_hits_misses_from_rubric(rubric)
+
+    present_block = "• " + "\n• ".join(present) if present else "—"
+    missing_block = "• " + "\n• ".join(missing) if missing else "—"
 
     return f"""
 GRADE THE STUDENT'S ANSWER USING THE RUBRIC AND THE WEB/BOOKLET SOURCES.
@@ -1338,19 +1372,100 @@ SOURCES (numbered; cite using [1], [2], … ONLY from this list):
 EXCERPTS (quote sparingly; cite using [1], [2], …):
 {excerpts_block}
 
-TASK (you MUST follow these steps):
-1) Extract the student's core CLAIMS ... give it one of the labels "Correct" (if it aligns with the MODEL ANSWER) / "Incorrect" (if it contradicts the MODEL ANSWER) / "Not supported" (in all other cases).
-2) Where you label a student core claim as incorrect, explain briefly why.
-3) Where important aspects are missing, explain what aspects are missing, and why they are important. 
-4) Give concise IMPROVEMENT TIPS (1–3 bullets) tied to the rubric issues, ideally with a numeric citation.
-5) End with a single-sentence CONCLUSION.
+AUTO-DETECTED EVIDENCE (deterministic; use as ground truth):
+- PRESENT in student's answer (DO NOT MARK THESE AS MISSING):
+{present_block}
 
-RULES:
-- Use numeric citations matching the SOURCES list (e.g., [1], [2]); never “[n]”.
-- Do not invent any Course Booklet page/para/case reference; cite only from SOURCES.
-- Be concrete; avoid tautologies (e.g., “refer to Art 7(1) instead of Art 7(1)”).
-- ≤400 words total.
+- POTENTIALLY MISSING (only mark as missing if truly absent AND material):
+{missing_block}
+
+OUTPUT TEMPLATE (use EXACTLY these headings; ≤250 words total):
+Student's Core Claims:
+• (Correct|Incorrect|Not supported) <short claim> [optional 1-line why if Incorrect]
+
+Missing Aspects:
+• <short aspect the student truly missed> [n]
+
+Improvement Tips (1–3):
+• <concise, actionable tip tied to the rubric> [n]
+
+Conclusion:
+<one sentence>
+
+HARD RULES:
+- NEVER say a concept is missing if it appears in the PRESENT list above.
+- Do not repeat long explanations for claims marked Correct; be concise.
+- Keep “Missing Aspects” to truly material points only (≤3 bullets).
+- Use numeric citations [n] only from SOURCES; never fabricate “[n]”.
+- Do not invent Course Booklet page/para/case numbers; cite only the numbered SOURCES.
+- ≤400 words; no extra sections; no preface/postscript.
 """
+
+def lock_out_false_missing(reply: str, rubric: dict) -> str:
+    """
+    Removes any 'Missing Aspects' bullet whose text contains a keyword we already
+    detected in the student's answer (rubric['per_issue'][...]['keywords_hit']).
+    """
+    if not reply:
+        return reply
+
+    try:
+        present, _ = _flatten_hits_misses_from_rubric(rubric)
+        present_set = {p.lower() for p in present}
+
+        # Find the 'Missing Aspects:' section using the same logic as _find_section
+        head, body, tail, span = _find_section(reply, r"Missing Aspects:")
+        if not head:
+            return reply
+
+        # Turn the section body into bullets, filter out any bullet that mentions a present keyword
+        bullets = _bulletize(body)
+        kept = []
+        for b in bullets:
+            low = re.sub(r"\s+", " ", b).lower()
+            if any(k in low for k in present_set):
+                # Drop bullet: it hallucinates "missing" for something we already saw
+                continue
+            kept.append(b)
+
+        new_block = "—\n" if not kept else "\n".join(kept) + "\n"
+        return reply.replace(head + body + tail, head + new_block + tail)
+    except Exception:
+        return reply
+
+
+def enforce_feedback_template(reply: str) -> str:
+    """
+    Light normaliser:
+    - Rename 'CLAIMS:' to 'Student's Core Claims:' if model drifted.
+    - Collapse duplicate 'Correct. This claim aligns...' lines.
+    - Normalise odd bullet artifacts such as 'Suggestions: • • None. •'
+    - Ensure empty 'Improvement Tips'/'Missing Aspects' show as '—'
+    """
+    if not reply:
+        return reply
+
+    # 1) Fix heading drift
+    reply = re.sub(r"(?im)^\s*CLAIMS\s*:\s*$", "Student's Core Claims:", reply)
+
+    # 2) Remove repeated boilerplate "Correct. This claim aligns with the MODEL ANSWER."
+    reply = re.sub(r"(?im)^\s*Correct\. This claim aligns with the MODEL ANSWER\.\s*$", "", reply)
+
+    # 3) Clean stray multiple bullets like "• • None. •"
+    reply = re.sub(r"•\s*•\s*", "• ", reply)  # collapse doubled bullets
+    reply = re.sub(r"(?im)(Suggestions:)\s*•\s*None\.?\s*(?:•\s*)*$", r"\1\n—", reply)
+
+    # 4) If a heading is present but no content, replace with '—'
+    for title in ["Missing Aspects:", "Improvement Tips", "Suggestions:"]:
+        reply = re.sub(
+            rf"(?is)({re.escape(title)}\s*)(?:-+\s*|\s*)\n?(?=\n|$)",
+            r"\1—\n",
+            reply
+        )
+
+    # 5) Remove a few accidental blank lines
+    reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
+    return reply
 
 def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_block: str, excerpts_block: str) -> List[Dict]:
     msgs = [{"role": "system", "content": system_guardrails()}]
@@ -2051,6 +2166,8 @@ with colA:
                 reply = merge_to_suggestions(reply, student_answer, activate=agreement)
                 reply = tidy_empty_sections(reply)
                 reply = prune_redundant_improvements(student_answer, reply)
+                reply = lock_out_false_missing(reply, rubric)
+                reply = enforce_feedback_template(reply)
                 
                 if reply:
                     # Safety net: strip any stray “[n]” placeholders

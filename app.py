@@ -665,6 +665,189 @@ def detect_substantive_flags(answer: str) -> List[str]:
     return flags
 
 # =======================
+# AGREEMENT MODE + TAG NORMALISATION (general, scalable)
+# =======================
+
+def in_agreement_mode(rubric: dict, sim_thresh: float = 85.0, cov_thresh: float = 70.0) -> bool:
+    """
+    True if the student's answer is highly aligned with the model answer.
+    Uses your rubric similarity & coverage (already computed).
+    """
+    try:
+        return (rubric or {}).get("similarity_pct", 0.0) >= sim_thresh and \
+               (rubric or {}).get("coverage_pct", 0.0) >= cov_thresh
+    except Exception:
+        return False
+def agreement_prompt_prelude(agreement: bool) -> str:
+    """
+    Guidance injected into the LLM prompt so it frames extras as Suggestions,
+    never as errors, when the answer is aligned.
+    """
+    if not agreement:
+        return ""
+    return (
+        "IMPORTANT RULES (agreement mode):\n"
+        "- If the student's claim matches the MODEL ANSWER, label it \"Correct\".\n"
+        "- If you want to add extra legal points (other provisions, edge cases, policy), put them under a section titled "
+        "\"Suggestions\" (or \"Further Considerations\"). Do NOT put them under 'Incorrect Claims'.\n"
+        "- Never mark a claim as 'Incorrect' unless it directly contradicts the MODEL ANSWER.\n\n"
+    )
+
+
+def _find_section(text: str, title_regex: str):
+    """
+    Return (head, body, tail, span) for the section whose title matches title_regex.
+    If not found, returns (None, None, None, None).
+    """
+    import re
+    m = re.search(
+        rf"({title_regex}\s*)(.*?)(\n(?:Student's Core Claims:|Incorrect Claims:|Missing Aspects:|Suggestions:|Improvement Tips|Conclusion|📚|Sources used|$))",
+        text,
+        flags=re.S | re.I,
+    )
+    if not m:
+        return None, None, None, None
+    return m.group(1), m.group(2), m.group(3), m.span(0)
+
+
+def normalize_core_claim_labels(reply: str, force_all_correct: bool) -> str:
+    """
+    Inside 'Student's Core Claims:' block:
+    - If force_all_correct=True => flip any '(Incorrect|Not supported|Can be improved|…)' to '(Correct)'.
+    - Otherwise, allow only (Correct|Incorrect|Not supported). Map other tags to 'Not supported'.
+    """
+    if not reply:
+        return reply
+    import re
+    sec = re.search(
+        r"(Student's Core Claims:\s*)(.*?)(\n(?:Incorrect Claims:|Missing Aspects:|Suggestions:|Improvement Tips|Conclusion|📚|Sources used|$))",
+        reply,
+        flags=re.S | re.I,
+    )
+    if not sec:
+        return reply
+    head, block, tail = sec.group(1), sec.group(2), sec.group(3)
+
+    if force_all_correct:
+        block = re.sub(r"\(([^)]*)\)", "(Correct)", block)
+    else:
+        def repl(m):
+            tag = (m.group(1) or "").strip()
+            if tag in {"Correct", "Incorrect", "Not supported"}:
+                return f"({tag})"
+            return "(Not supported)"
+        block = re.sub(r"\(([^)]*)\)", repl, block)
+
+    return reply.replace(sec.group(0), head + block + tail)
+
+
+def _bulletize(text: str) -> list[str]:
+    """
+    Split a block into clean '• ...' bullets (preserves inline punctuation).
+    """
+    if not text:
+        return []
+    import re
+    raw_lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+    out = []
+    for ln in raw_lines:
+        # strip any leading bullet markers to re‑standardise
+        ln = re.sub(r"^[•\-\*\d\.\)\s]+", "", ln).strip()
+        if ln:
+            out.append(f"• {ln}")
+    # dedupe while preserving order
+    seen = set()
+    uniq = []
+    for b in out:
+        if b not in seen:
+            uniq.append(b); seen.add(b)
+    return uniq
+
+
+def _neutralise_error_tone(line: str) -> str:
+    """
+    Turn blamey phrasing into 'suggestion' tone.
+    """
+    import re
+    s = line
+    s = re.sub(r"\b[Tt]he student incorrectly (states|assumes|concludes)\b", "Consider also", s)
+    s = re.sub(r"\b[Tt]his is incorrect because\b", "Rationale:", s)
+    s = s.replace("is incorrect", "may be incomplete")
+    return s
+
+
+def merge_to_suggestions(reply: str, student_answer: str, activate: bool = True) -> str:
+    """
+    When activated (agreement mode), remove 'Incorrect Claims' and 'Missing Aspects'
+    sections and merge their content into a neutral 'Suggestions:' section.
+    """
+    if not reply or not activate:
+        return reply
+
+    # 1) Extract both sections (if any)
+    inc_head, inc_body, inc_tail, inc_span = _find_section(reply, r"Incorrect Claims:")
+    mis_head, mis_body, mis_tail, mis_span = _find_section(reply, r"Missing Aspects:")
+
+    if not any([inc_head, mis_head]):
+        return reply
+
+    # 2) Build a combined suggestions list
+    suggestions = []
+    suggestions += _bulletize(inc_body or "")
+    suggestions += _bulletize(mis_body or "")
+    suggestions = [_neutralise_error_tone(s) for s in suggestions]
+    # Keep short, informative suggestions
+    suggestions = suggestions[:8]
+
+    # 3) Remove original sections by cutting spans (from end to start)
+    parts = []
+    last = 0
+    cut_spans = []
+    if inc_span: cut_spans.append(inc_span)
+    if mis_span: cut_spans.append(mis_span)
+    for s, e in sorted(cut_spans):
+        parts.append(reply[last:s])
+        last = e
+    parts.append(reply[last:])
+    tmp = "".join(parts)
+
+    # 4) Insert Suggestions before Improvement Tips (preferred) or before Conclusion
+    import re
+    suggestions_block = ""
+    if suggestions:
+        suggestions_block = "Suggestions:\n" + "\n".join(suggestions) + "\n\n"
+
+    # try to insert before 'Improvement Tips'
+    tip_sec = re.search(r"\n(?=Improvement Tips\b)", tmp, flags=re.I)
+    if tip_sec:
+        idx = tip_sec.start()
+        return tmp[:idx] + "\n" + suggestions_block + tmp[idx:]
+    # else insert before 'Conclusion'
+    concl_sec = re.search(r"\n(?=Conclusion\b)", tmp, flags=re.I)
+    if concl_sec:
+        idx = concl_sec.start()
+        return tmp[:idx] + "\n" + suggestions_block + tmp[idx:]
+    # else append at end
+    return (tmp.rstrip() + "\n\n" + suggestions_block).rstrip() + "\n"
+
+
+def tidy_empty_sections(reply: str) -> str:
+    """
+    Remove headings that ended up empty after normalisation.
+    """
+    if not reply:
+        return reply
+    import re
+    # Remove empty sections like 'Missing Aspects:' followed by '—' or blank lines
+    reply = re.sub(r"(Missing Aspects:\s*)(?:—\s*|\s*)(?=\n(?:Improvement Tips|Conclusion|📚|Sources used|$))",
+                   "", reply, flags=re.S | re.I)
+    reply = re.sub(r"(Incorrect Claims:\s*)(?:—\s*|\s*)(?=\n(?:Missing Aspects|Improvement Tips|Conclusion|📚|Sources used|$))",
+                   "", reply, flags=re.S | re.I)
+    reply = re.sub(r"(Suggestions:\s*)(?:—\s*|\s*)(?=\n(?:Improvement Tips|Conclusion|📚|Sources used|$))",
+                   "", reply, flags=re.S | re.I)
+    return reply
+
+# =======================
 # MODEL-CONSISTENCY GUARDRAIL (general, no question-specific logic)
 # =======================
 
@@ -1698,7 +1881,10 @@ with colA:
                     api_key,
                     DEFAULT_WEIGHTS
                 )
-                                
+
+                agreement = in_agreement_mode(rubric)
+                prelude = agreement_prompt_prelude(agreement)
+                
                 top_pages, source_lines = [], []
                 if enable_web:
                     pages = collect_corpus(student_answer, "", max_fetch=22)

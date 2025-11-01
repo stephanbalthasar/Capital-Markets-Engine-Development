@@ -654,29 +654,6 @@ def _find_section(text: str, title_regex: str):
         return None, None, None, None
     return m.group(1), m.group(2), m.group(3), m.span(0)
 
-def _bulletize(text: str) -> list[str]:
-    """
-    Split a block into clean '• ...' bullets (preserves inline punctuation).
-    """
-    if not text:
-        return []
-    import re
-    raw_lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
-    out = []
-    for ln in raw_lines:
-        # strip any leading bullet markers to re‑standardise
-        ln = re.sub(r"^[•\-\*\d\.\)\s]+", "", ln).strip()
-        if ln:
-            out.append(f"• {ln}")
-    # dedupe while preserving order
-    seen = set()
-    uniq = []
-    for b in out:
-        if b not in seen:
-            uniq.append(b); seen.add(b)
-    return uniq
-
-
 def _neutralise_error_tone(line: str) -> str:
     """
     Turn blamey phrasing into 'suggestion' tone.
@@ -706,8 +683,8 @@ def merge_to_suggestions(reply: str, student_answer: str, activate: bool = True)
 
     # 2) Build a combined suggestions list
     suggestions = []
-    suggestions += _bulletize(inc_body or "")
-    suggestions += _bulletize(mis_body or "")
+    suggestions += [f"• {ln.strip()}" for ln in (inc_body or "").splitlines() if ln.strip()]
+    suggestions += [f"• {ln.strip()}" for ln in (mis_body or "").splitlines() if ln.strip()]
     suggestions = [_neutralise_error_tone(s) for s in suggestions]
     # Keep short, informative suggestions
     suggestions = suggestions[:8]
@@ -869,12 +846,9 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
         m = re.search(rf"({title_regex}\\s*)(.*?)(\\n(?:\\*\\*Student's Core Claims:\\*\\*|\\*\\*Mistakes:\\*\\*|\\*\\*Suggestions:\\*\\*|\\*\\*Conclusion:\\*\\*|$))", text, flags=re.S | re.I)
         return m.groups() if m else (None, None, None)
 
-    def _bulletize(text):
-        return [f"• {ln.strip()}" for ln in text.strip().splitlines() if ln.strip()]
-
     head, body, tail = _find_section(reply, r"\\*\\*Missing Aspects:\\*\\*")
     if head:
-        bullets = _bulletize(body)
+        bullets = [f"• {ln.strip()}" for ln in body.strip().splitlines() if ln.strip()]
         kept = [b for b in bullets if not any(p in b.lower() for p in present)]
         reply = reply.replace(head + body + tail, head + ("\n".join(kept) + "\n" if kept else "—\n") + tail)
 
@@ -1424,7 +1398,7 @@ def lock_out_false_missing(reply: str, rubric: dict) -> str:
             return reply
 
         # Turn the section body into bullets, filter out any bullet that mentions a present keyword
-        bullets = _bulletize(body)
+        bullets = [f"• {ln.strip()}" for ln in body.strip().splitlines() if ln.strip()]
         kept = []
         for b in bullets:
             low = re.sub(r"\s+", " ", b).lower()

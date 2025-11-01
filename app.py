@@ -61,22 +61,22 @@ import re
 
 def split_inline_bullets(text: str) -> str:
     """
-    Ensures that each bullet point starts on a new line.
-    Only affects lines where multiple bullets are crammed together.
+    Ensures each bullet point starts on a new line.
+    Works even if multiple bullets are crammed into one line.
     """
     if not text:
         return text
-    # Split any line that contains multiple bullets into separate lines
-    lines = text.splitlines()
-    fixed_lines = []
-    for line in lines:
-        # If line contains multiple bullets, split them
-        if line.count("•") > 1:
-            bullets = re.findall(r'•\s*[^•]+', line)
-            fixed_lines.extend([b.strip() for b in bullets])
-        else:
-            fixed_lines.append(line)
-    return "\n".join(fixed_lines)
+
+    # Replace all inline bullets with newline + bullet
+    text = re.sub(r'\s*•\s*', r'\n• ', text)
+
+    # Remove accidental double bullets
+    text = re.sub(r'\n•\s*•\s*', r'\n• ', text)
+
+    # Collapse excessive blank lines
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    return text.strip()
 
 def _anchors_from_model(model_answer_slice: str, cap: int = 20) -> list[str]:
     s = model_answer_slice or ""

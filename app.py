@@ -57,6 +57,27 @@ def bold_section_headings(reply: str) -> str:
     reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
     return reply
 
+import re
+
+def split_inline_bullets(text: str) -> str:
+    """
+    Ensures that each bullet point starts on a new line.
+    Only affects lines where multiple bullets are crammed together.
+    """
+    if not text:
+        return text
+    # Split any line that contains multiple bullets into separate lines
+    lines = text.splitlines()
+    fixed_lines = []
+    for line in lines:
+        # If line contains multiple bullets, split them
+        if line.count("•") > 1:
+            bullets = re.findall(r'•\s*[^•]+', line)
+            fixed_lines.extend([b.strip() for b in bullets])
+        else:
+            fixed_lines.append(line)
+    return "\n".join(fixed_lines)
+
 def _anchors_from_model(model_answer_slice: str, cap: int = 20) -> list[str]:
     s = model_answer_slice or ""
     acr = re.findall(r"\b[A-ZÄÖÜ]{2,6}\b", s)                        # MAR, PR, TD, WpHG, ...
@@ -1437,41 +1458,6 @@ def enforce_feedback_template(reply: str) -> str:
     reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
     return reply
 
-import re
-
-def normalize_bullets_safely(text: str) -> str:
-    """
-    Fixes bullet formatting:
-    - Ensures each bullet starts on a new line.
-    - Preserves section headings and layout.
-    - Only affects lines with multiple bullets.
-    """
-    if not text:
-        return text
-
-    # Step 1: Split into lines
-    lines = text.splitlines()
-    fixed_lines = []
-
-    for line in lines:
-        # Preserve section headings (e.g., '**Suggestions:**')
-        if re.match(r'^\s*\*\*.*\*\*\s*$', line):
-            fixed_lines.append(line.strip())
-            continue
-
-        # If line contains multiple bullets, split them
-        bullets = re.findall(r'•\s*[^•]+', line)
-        if len(bullets) > 1:
-            fixed_lines.extend([b.strip() for b in bullets])
-        else:
-            fixed_lines.append(line.strip())
-
-    # Step 2: Collapse excessive blank lines
-    result = "\n".join(fixed_lines)
-    result = re.sub(r'\n{3,}', '\n\n', result)
-
-    return result.strip()
-
 def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_block: str, excerpts_block: str) -> List[Dict]:
     msgs = [{"role": "system", "content": system_guardrails()}]
 
@@ -2133,7 +2119,7 @@ with colA:
                 reply = enforce_feedback_template(reply)
                 reply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)
                 reply = bold_section_headings(reply)
-                reply = normalize_bullets_safely(reply)
+                reply = split_inline_bullets(reply)
                 reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
             
                 used_idxs = parse_cited_indices(reply)

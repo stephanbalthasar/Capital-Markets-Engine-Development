@@ -2326,7 +2326,6 @@ with st.sidebar:
                   # e.g., "para 1: …, para 2: …" or "Case Study 1: …, para 3: …"
                   summary = ", ".join(f"{lab}: {w}" for _, lab, w in items)
                   st.write(summary)
-                  
     # ---- Diagnostic to confirm guardrail ----
     with st.expander("🛡️ Consistency guardrail (dev)", expanded=False):
         # Try the most recent feedback first; fall back to chat

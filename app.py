@@ -720,10 +720,10 @@ def generate_rubric_from_model_answer(student_answer: str, model_answer: str, ba
 
     missing = []
     for row in per_issue:
-        missed = [kw for kw in row["keywords_total"] if kw not in row["keywords_hit"]]
+        missed = [kw for kw in row["keywords_total"] if not keyword_present(student_answer, kw)]
         if missed:
             missing.append({"issue": row["issue"], "missed_keywords": missed})
-
+    
     substantive_flags = detect_substantive_flags(student_answer)
 
     return {

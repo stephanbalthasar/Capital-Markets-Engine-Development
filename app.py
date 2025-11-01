@@ -62,18 +62,18 @@ import re
 def split_inline_bullets(text: str) -> str:
     """
     Ensures each bullet point starts on a new line.
-    Works even if multiple bullets are crammed into one line.
+    Works even if multiple bullets are crammed into one paragraph.
     """
     if not text:
         return text
 
-    # Replace all inline bullets with newline + bullet
-    text = re.sub(r'\s*•\s*', r'\n• ', text)
+    # Step 1: Insert newline before each bullet (except the first one in a line)
+    text = re.sub(r'(?<!\n)\s*•\s*', r'\n• ', text)
 
-    # Remove accidental double bullets
+    # Step 2: Remove accidental double bullets
     text = re.sub(r'\n•\s*•\s*', r'\n• ', text)
 
-    # Collapse excessive blank lines
+    # Step 3: Collapse excessive blank lines
     text = re.sub(r'\n{3,}', '\n\n', text)
 
     return text.strip()

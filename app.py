@@ -47,14 +47,45 @@ def fix_bullets_in_section(reply: str, section_title: str) -> str:
 
 def ensure_clean_bullets(reply: str) -> str:
     """
-    Applies bullet formatting fix to all relevant sections.
+    Ensures that if a section contains bullets, each bullet starts on a new line.
+    Does NOT force bulletization if the section is prose.
     """
-    for section in ["Student's Core Claims", "Mistakes", "Missing Aspects", "Suggestions", "Improvement Tips", "Conclusion"]:
+    import re
+
+    def fix_bullets_in_section(reply: str, section_title: str) -> str:
+        # Match the section block
+        pattern = rf"(?is)(\*\*{re.escape(section_title)}:\*\*\s*)(.*?)(?=\n\*\*|\Z)"
+        match = re.search(pattern, reply)
+        if not match:
+            return reply
+
+        head, body = match.group(1), match.group(2)
+
+        # Only fix if bullets are present
+        if "•" not in body:
+            return reply
+
+        # Ensure each bullet starts on a new line (but not if already)
+        fixed_body = re.sub(r"(?<!\n)[ \t]*•[ \t]*", r"\n• ", body.strip())
+
+        # Rebuild the section
+        new_block = head + "\n" + fixed_body.strip() + "\n"
+        return re.sub(pattern, new_block, reply)
+
+    # Apply to all relevant sections
+    for section in [
+        "Student's Core Claims",
+        "Mistakes",
+        "Missing Aspects",
+        "Suggestions",
+        "Improvement Tips",
+        "Conclusion"
+    ]:
         reply = fix_bullets_in_section(reply, section)
 
-    # Collapse excessive blank lines
+    # Clean up excessive blank lines
     reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
-    return reply
+    return reply    
 
 def bold_section_headings(reply: str) -> str:
     """

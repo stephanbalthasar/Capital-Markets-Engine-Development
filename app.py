@@ -579,22 +579,43 @@ import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 import numpy as np
 
-import re
-from sklearn.feature_extraction.text import TfidfVectorizer
-import numpy as np
-
 def improved_keyword_extraction(text: str, max_keywords: int = 20) -> list[str]:
     if not text:
         return []
 
-    # Extract legal anchors with law names
+    # Extract law acronyms
     acronyms = re.findall(r"\b(?:MAR|PR|MiFID II|TD|WpHG|WpÜG)\b", text)
-    articles = re.findall(r"(?i)\b(?:Art\.?|Article)\s*\d+(?:\([^)]+\))*\s*(?:MAR|PR|MiFID II|TD|WpHG|WpÜG)", text)
-    paragraphs = re.findall(r"§\s*\d+[a-z]?(?:\([^)]+\))*\s*(?:WpHG|WpÜG)", text)
+
+    # Extract articles with law names (e.g. "article 7(1) MAR")
+    articles = re.findall(
+        r"(?i)\b(?:Art\.?|Article)\s*\d+(?:\([^)]+\))*\s*(MAR|PR|MiFID II|TD|WpHG|WpÜG)",
+        text
+    )
+    article_matches = re.findall(
+        r"(?i)\b(?:Art\.?|Article)\s*\d+(?:\([^)]+\))*",
+        text
+    )
+    full_articles = []
+    for match in article_matches:
+        for law in acronyms:
+            if law in text:
+                full_articles.append(f"{match.strip()} {law}")
+                break
+    # Extract paragraphs with law names (e.g. "§ 33 WpHG")
+    paragraph_matches = re.findall(r"§\s*\d+[a-z]?(?:\([^)]+\))*", text)
+    full_paragraphs = []
+    for match in paragraph_matches:
+        for law in acronyms:
+            if law in text and law in ["WpHG", "WpÜG"]:
+                full_paragraphs.append(f"{match.strip()} {law}")
+                break
+
+    # Extract ECJ cases and named cases
     cases = re.findall(r"C[-–—]?\d+/\d+", text)
     named_cases = re.findall(r"\bLafonta\b|\bGeltl\b|\bHypo Real Estate\b", text, flags=re.I)
 
-    legal_anchors = articles + paragraphs + acronyms + cases + named_cases
+    # Combine legal anchors
+    legal_anchors = full_articles + full_paragraphs + acronyms + cases + named_cases
 
     # TF-IDF for generic legal terms
     vec = TfidfVectorizer(ngram_range=(1, 3), max_features=3000, stop_words="english")
@@ -630,7 +651,7 @@ def improved_keyword_extraction(text: str, max_keywords: int = 20) -> list[str]:
             final_keywords.append(kw_norm)
 
     return final_keywords[:max_keywords]
-
+    
 def extract_issues_from_model_answer(model_answer: str, llm_api_key: str) -> list[dict]:
     model_answer = (model_answer or "").strip()
     if not model_answer:

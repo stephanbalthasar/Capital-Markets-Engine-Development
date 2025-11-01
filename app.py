@@ -1441,8 +1441,10 @@ import re
 
 def normalize_bullets_safely(text: str) -> str:
     """
-    Ensures each bullet point starts on a new line and is properly spaced.
-    Preserves section headings and other formatting.
+    Fixes bullet formatting:
+    - Ensures each bullet starts on a new line.
+    - Preserves section headings and layout.
+    - Only affects lines with multiple bullets.
     """
     if not text:
         return text
@@ -1457,21 +1459,15 @@ def normalize_bullets_safely(text: str) -> str:
             fixed_lines.append(line.strip())
             continue
 
-        # Normalize bullet prefix if line starts with bullet-like symbol
-        bullet_match = re.match(r'^\s*[-*•]\s*(.+)', line)
-        if bullet_match:
-            content = bullet_match.group(1).strip()
-            fixed_lines.append(f'• {content}')
+        # If line contains multiple bullets, split them
+        bullets = re.findall(r'•\s*[^•]+', line)
+        if len(bullets) > 1:
+            fixed_lines.extend([b.strip() for b in bullets])
         else:
-            fixed_lines.append(line)
+            fixed_lines.append(line.strip())
 
-    # Step 2: Join lines and ensure bullets are on their own lines
+    # Step 2: Collapse excessive blank lines
     result = "\n".join(fixed_lines)
-
-    # Step 3: Fix cases where bullets are stuck together (e.g., '• text • text')
-    result = re.sub(r'•\s*(.+?)\s*(?=•)', r'• \1\n', result)
-
-    # Step 4: Collapse excessive blank lines
     result = re.sub(r'\n{3,}', '\n\n', result)
 
     return result.strip()

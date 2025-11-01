@@ -817,9 +817,18 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
         m = re.search(rf"({title_regex}\\s*)(.*?)(\\n(?:\\*\\*Student's Core Claims:\\*\\*|\\*\\*Mistakes:\\*\\*|\\*\\*Suggestions:\\*\\*|\\*\\*Conclusion:\\*\\*|$))", text, flags=re.S | re.I)
         return m.groups() if m else (None, None, None)
 
+    present_keywords = {kw.lower() for row in rubric.get("per_issue", []) for kw in row.get("keywords_hit", [])}
+    
     head, body, tail = _find_section(reply, r"\\*\\*Missing Aspects:\\*\\*")
     if head:
         bullets = [f"• {ln.strip()}" for ln in body.strip().splitlines() if ln.strip()]
+        def fuzzy_keyword_match(bullet: str, present_keywords: set) -> bool:
+            bullet_low = bullet.lower()
+            for kw in present_keywords:
+                kw_tokens = kw.lower().split()
+                if all(tok in bullet_low for tok in kw_tokens):
+                    return True
+            return False
         kept = [b for b in bullets if not any(p in b.lower() for p in present)]
         reply = reply.replace(head + body + tail, head + ("\n".join(kept) + "\n" if kept else "—\n") + tail)
 

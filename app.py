@@ -220,6 +220,75 @@ def _extract_case_studies(doc: fitz.Document) -> Dict[int, Dict[str, Dict[str, U
     return found
 
 # ---------- Public helpers you will call from the app ----------
+# --- Helper: Booklet page inspector (sidebar expander) ---
+def render_booklet_page_inspector():
+    with st.expander("📘 Course booklet: page inspector", expanded=False):
+        # Parse once per session (deterministic; underlying function already pure)
+        if "booklet_chunks" not in st.session_state:
+            try:
+                chs, mts = extract_manual_chunks_with_refs(PDF_PATH, chunk_words_hint=170)
+                st.session_state["booklet_chunks"] = (chs or [], mts or [])
+            except Exception as e:
+                st.session_state["booklet_chunks"] = ([], [])
+                st.warning(f"Booklet parser error: {e}")
+
+        chunks, metas = st.session_state.get("booklet_chunks", ([], []))
+        if not chunks or not metas:
+            st.write("— parser not available or booklet not parsed —")
+            return
+
+        # Collect available PDF pages from metadata
+        pages = sorted({m.get("page_num") for m in metas if m.get("page_num")})
+        if not pages:
+            st.write("— no page metadata found —")
+            return
+
+        # Page picker + preview length
+        col1, col2 = st.columns([2, 3])
+        with col1:
+            sel_page = st.selectbox(
+                "PDF page",
+                options=pages,
+                index=0,
+                help="Choose a PDF page number from the Course Booklet."
+            )
+        with col2:
+            peek_words = st.slider("Words to preview", 3, 15, 8, 1)
+
+        # Build ordered items for the chosen page (preserve creation order)
+        items = []
+        for i, (ch, m) in enumerate(zip(chunks, metas)):
+            if m.get("page_num") != sel_page:
+                continue
+
+            label = None
+            # Case block (explicit 'kind' or detected via meta['cases'])
+            if (m.get("kind") == "case") or (m.get("cases") and len(m.get("cases")) > 0):
+                n = (m.get("cases") or [None])[0]
+                if n:
+                    label = f"Case Study {n}"
+
+            # Numbered paragraph
+            if not label and (m.get("paras") and len(m.get("paras")) > 0):
+                p = m["paras"][0]
+                label = f"para {p}"
+
+            if not label:
+                continue  # skip unanchored fragments
+
+            words_list = (ch or "").split()
+            preview = " ".join(words_list[:peek_words]) + ("…" if len(words_list) > peek_words else "")
+            items.append((i, label, preview))
+
+        if not items:
+            st.write("— no numbered items on this page —")
+            return
+
+        # Compact one-line diagnostic summary:
+        # e.g., "para 1: …, para 2: …" or "Case Study 1: …, para 3: …"
+        summary = ", ".join(f"{lab}: {w}" for _, lab, w in items)
+        st.write(summary)
+
 def bold_section_headings(reply: str) -> str:
     """
     Make core section headings bold and ensure a blank line after each.
@@ -2261,69 +2330,8 @@ with st.sidebar:
             st.exception(e)
     
     # --- Course Booklet diagnostics ---
-    with st.expander("📘 Course booklet: page inspector", expanded=False):
-        # Parse once per session (deterministic; underlying function already pure)
-        if "booklet_chunks" not in st.session_state:
-            try:
-                chs, mts = extract_manual_chunks_with_refs(PDF_PATH, chunk_words_hint=170)
-                st.session_state.booklet_chunks = (chs or [], mts or [])
-            except Exception as e:
-                st.session_state.booklet_chunks = ([], [])
-                st.warning(f"Booklet parser error: {e}")
-    
-        chunks, metas = st.session_state.booklet_chunks
-    
-        if not chunks or not metas:
-            st.write("— parser not available or booklet not parsed —")
-        else:
-            # Collect available PDF pages from metadata
-            pages = sorted({m.get("page_num") for m in metas if m.get("page_num")})
-            if not pages:
-                st.write("— no page metadata found —")
-            else:
-                # Page picker + preview length
-                col1, col2 = st.columns([2, 3])
-                with col1:
-                    sel_page = st.selectbox(
-                        "PDF page",
-                        options=pages,
-                        index=0,
-                        help="Choose a PDF page number from the Course Booklet."
-                    )
-                with col2:
-                    peek_words = st.slider("Words to preview", 3, 15, 8, 1)
-    
-                # Build ordered items for the chosen page (preserve creation order)
-                items = []
-                for i, (ch, m) in enumerate(zip(chunks, metas)):
-                    if m.get("page_num") != sel_page:
-                        continue
-    
-                    label = None
-                    # Case block (explicit 'kind' or detected via meta['cases'])
-                    if (m.get("kind") == "case") or (m.get("cases") and len(m.get("cases")) > 0):
-                        n = (m.get("cases") or [None])[0]
-                        if n:
-                            label = f"Case Study {n}"
-    
-                    # Numbered paragraph
-                    if not label and (m.get("paras") and len(m.get("paras")) > 0):
-                        p = m["paras"][0]
-                        label = f"para {p}"
-    
-                    if not label:
-                        continue  # skip unanchored fragments
-                    words_list = (ch or "").split()
-                    preview = " ".join(words_list[:peek_words]) + ("…" if len(words_list) > peek_words else "")
-                    items.append((i, label, preview))
-    
-                if not items:
-                    st.write("— no numbered items on this page —")
-                else:
-                    # Compact one-line diagnostic summary:
-                    # e.g., "para 1: …, para 2: …" or "Case Study 1: …, para 3: …"
-                    summary = ", ".join(f"{lab}: {w}" for _, lab, w in items)
-                    st.write(summary)
+    # --- Course Booklet diagnostics ---
+    render_booklet_page_inspector()
     
     # ---- Diagnostic to confirm guardrail ----
     with st.expander("🛡️ Consistency guardrail (dev)", expanded=False):

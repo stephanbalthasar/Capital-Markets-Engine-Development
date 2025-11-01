@@ -2260,7 +2260,6 @@ with st.sidebar:
         except Exception as e:
             st.exception(e)
     
-    # ---- Course Booklet diagnostics ----
     # --- Course Booklet diagnostics ---
     with st.expander("📘 Course booklet: page inspector", expanded=False):
         # Parse once per session (deterministic; underlying function already pure)

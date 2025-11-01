@@ -775,11 +775,11 @@ def canonicalize(s: str, strip_paren_numbers: bool = False) -> str:
 
 import re
 
+
 def keyword_present(answer: str, kw: str) -> bool:
     """
-    Improved presence detector:
-    - Handles compound legal references like 'article 17(4)(a) MAR' or '§ 33 WpHG'
-    - If the student mentions the article/paragraph and the law name separately, it's counted as present
+    Detects presence of compound legal references like 'article 17(4)(a) MAR' or '§ 33 WpHG'
+    even if the student mentions the article/paragraph and the law name separately.
     """
     import re
 
@@ -799,20 +799,16 @@ def keyword_present(answer: str, kw: str) -> bool:
         return True
 
     # Split compound keywords like 'article 17(4)(a) MAR'
-    match = re.match(r"^(art\s*\d+(\([^)]+\))*)\s+(mar|pr|mifidii|td|wphg|wpüg)$", kw.lower())
-    if match:
-        article_part = canonicalize(match.group(1))
-        law_part = canonicalize(match.group(3))
-        return article_part in ans_can and law_part in ans_can
+    parts = kw.strip().split()
+    if len(parts) >= 2:
+        main_part = " ".join(parts[:-1])
+        law_part = parts[-1]
+        main_can = canonicalize(main_part)
+        law_can = canonicalize(law_part)
+        return main_can in ans_can and law_can in ans_can
 
-    # Same for § references
-    match_para = re.match(r"^(§\s*\d+[a-z]?(?:\([^)]+\))*)\s+(wphg|wpüg)$", kw.lower())
-    if match_para:
-        para_part = canonicalize(match_para.group(1))
-        law_part = canonicalize(match_para.group(2))
-        return para_part in ans_can and law_part in ans_can
-
-    return False
+    # Fallback: check if keyword appears loosely
+    return canonicalize(kw) in ans_can
 
 def coverage_score(answer: str, issue: Dict) -> Tuple[int, List[str]]:
     hits = [kw for kw in issue["keywords"] if keyword_present(answer, kw)]

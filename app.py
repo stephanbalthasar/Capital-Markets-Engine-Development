@@ -2151,7 +2151,7 @@ with colA:
                 display_source_lines = filter_sources_by_indices(source_lines, used_idxs) or source_lines
             
                 if reply:
-                    t.markdown(fix_bullet_spacing(reply))
+                    st.markdown(fix_bullet_spacing(reply))
                 else:
                     st.info("LLM unavailable. See corrections above and the issue breakdown.")
             else:

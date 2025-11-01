@@ -847,8 +847,8 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
         lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
         fixed = []
         for ln in lines:
-            ln = re.sub(r"^\s*[•\-*]\s*", "", ln).strip()
-            ln = f"• {ln}"
+            ln = re.sub(r"\s*•\s*", "\n• ", ln).strip()
+            ln = re.sub(r"^\s*•\s*", "• ", ln)  # Ensure only one bullet at the start
             m1 = re.match(r"^\\s*•\\s*(Correct|Incorrect|Not supported)\\s*:?\\s*(.+)$", ln, flags=re.I)
             m2 = re.match(r"^\\s*•\\s*\\[(Correct|Incorrect|Not supported)\\]\\s*(.+)$", ln, flags=re.I)
             if m1:
@@ -860,6 +860,7 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
             else:
                 fixed.append(f"• {ln} — [Not supported]")
         reply = reply.replace(m.group(0), head + "\n".join(fixed) + tail)
+        reply = re.sub(r"(?<!\n)\s*•\s*", r"\n• ", reply)
 
     # Remove hallucinated 'Missing Aspects' (already present in student answer)
     present = set()

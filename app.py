@@ -1771,9 +1771,10 @@ def render_sources_used(source_lines: list[str]) -> None:
 # --- Citation post-processing & filtering ---
 def parse_cited_indices(text: str) -> list[int]:
     try:
-        return sorted(set(int(x) for x in re.findall(r"\[(\d+)\]", text or "")))
+        return sorted({int(x) for x in re.findall(r"\[(\d+)\]", text or "")})
     except Exception:
         return []
+
 
 def filter_sources_by_indices(source_lines: list[str], used: list[int]) -> list[str]:
     """Return only those lines whose [n] was actually cited; preserve numbering."""
@@ -2409,16 +2410,9 @@ with colA:
                 reply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)
                 reply = bold_section_headings(reply)
                 reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
+                used_idxs = parse_cited_indices(reply)
+                display_source_lines = filter_sources_by_indices(source_lines, used_idxs) or source_lines
                 st.markdown(reply)
-                
-                if reply:
-                    # Safety net: strip any stray “[n]” placeholders
-                    reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
-                    st.write(reply)
-
-                    # Show only the sources actually cited in the narrative:
-                    used_idxs = parse_cited_indices(reply)
-                    display_source_lines = filter_sources_by_indices(source_lines, used_idxs) or source_lines
                 else:
                     st.info("LLM unavailable. See corrections above and the issue breakdown.")
             else:

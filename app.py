@@ -2317,9 +2317,9 @@ with st.sidebar:
                     if not label:
                         continue  # skip unanchored fragments
 
-                  words_list = (ch or "").split()
-                  preview = " ".join(words_list[:peek_words]) + ("…" if len(words_list) > peek_words else "")
-                  items.append((i, label, preview))
+                    words_list = (ch or "").split()
+                    preview = " ".join(words_list[:peek_words]) + ("…" if len(words_list) > peek_words else "")
+                    items.append((i, label, preview))
 
                 if not items:
                     st.write("— no numbered items on this page —")

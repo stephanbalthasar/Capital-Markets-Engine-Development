@@ -778,52 +778,41 @@ import re
 def keyword_present(answer: str, kw: str) -> bool:
     """
     Improved presence detector:
-    - Handles cases like 'article 17(4)(a)' even if 'MAR' is omitted.
-    - Uses context to infer the law name if present elsewhere in the answer.
+    - Handles compound legal references like 'article 17(4)(a) MAR' or '§ 33 WpHG'
+    - If the student mentions the article/paragraph and the law name separately, it's counted as present
     """
+    import re
 
-    def canonicalize(s: str, strip_paren_numbers: bool = False) -> str:
+    def canonicalize(s: str) -> str:
         s = s.lower()
         s = s.replace("art.", "art").replace("article", "art").replace("–", "-")
         s = s.replace("wpüg", "wpüg")
         s = re.sub(r"\s+", "", s)
-        if strip_paren_numbers:
-            s = re.sub(r"\(\d+[a-z]?\)", "", s)
-        s = re.sub(r"[^a-z0-9§]", "", s)
+        s = re.sub(r"[^\w§]", "", s)
         return s
 
-    def normalize_ws(s: str) -> str:
-        return re.sub(r"\s+", " ", s).strip()
+    ans_can = canonicalize(answer)
+    kw_can = canonicalize(kw)
 
-    ans_can = canonicalize(answer, strip_paren_numbers=True)
-    kw_can = canonicalize(kw, strip_paren_numbers=True)
+    # Direct match
+    if kw_can in ans_can:
+        return True
 
-    # If keyword is a legal reference missing the law name, infer from context
-    if re.match(r"(?i)^art\s*\d+", kw):
-        art_match = re.match(r"(?i)(art\s*\d+(?:\([^)]+\))*)", kw)
-        if art_match:
-            art_core = art_match.group(1).strip()
-            law_names = ["mar", "pr", "mifidii", "td", "wphg", "wpüg"]
-            for law in law_names:
-                if law in ans_can:
-                    art_kw = canonicalize(f"{art_core} {law}", strip_paren_numbers=True)
-                    if art_kw in ans_can or canonicalize(art_core, strip_paren_numbers=True) in ans_can:
-                        return True
+    # Split compound keywords like 'article 17(4)(a) MAR'
+    match = re.match(r"^(art\s*\d+(\([^)]+\))*)\s+(mar|pr|mifidii|td|wphg|wpüg)$", kw.lower())
+    if match:
+        article_part = canonicalize(match.group(1))
+        law_part = canonicalize(match.group(3))
+        return article_part in ans_can and law_part in ans_can
 
-    # Same logic for § references
-    if kw.strip().lower().startswith("§"):
-        para_match = re.match(r"§\s*\d+[a-z]?(?:\([^)]+\))*", kw)
-        if para_match:
-            para_core = para_match.group(0).strip()
-            law_names = ["wphg", "wpüg"]
-            for law in law_names:
-                if law in ans_can:
-                    para_kw = canonicalize(f"{para_core} {law}", strip_paren_numbers=True)
-                    if para_kw in ans_can or canonicalize(para_core, strip_paren_numbers=True) in ans_can:
-                        return True
+    # Same for § references
+    match_para = re.match(r"^(§\s*\d+[a-z]?(?:\([^)]+\))*)\s+(wphg|wpüg)$", kw.lower())
+    if match_para:
+        para_part = canonicalize(match_para.group(1))
+        law_part = canonicalize(match_para.group(2))
+        return para_part in ans_can and law_part in ans_can
 
-    # Fallback: direct match
-    return normalize_ws(kw).lower() in normalize_ws(answer).lower()
+    return False
 
 def coverage_score(answer: str, issue: Dict) -> Tuple[int, List[str]]:
     hits = [kw for kw in issue["keywords"] if keyword_present(answer, kw)]

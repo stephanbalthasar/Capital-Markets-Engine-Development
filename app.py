@@ -1346,7 +1346,7 @@ AUTO-DETECTED EVIDENCE:
 - POTENTIALLY MISSING (only mark as missing if truly absent AND material):
 {missing_block}
 
-OUTPUT FORMAT (use EXACTLY these headings. ALWAYS insert a line break after each heading. If you use bullets, you MUST insert a line break before each bullet.):
+OUTPUT FORMAT (use EXACTLY these headings):
 
 **Student's Core Claims:**
 • <claim> — [Correct|Incorrect|Not supported]
@@ -1365,6 +1365,8 @@ OUTPUT FORMAT (use EXACTLY these headings. ALWAYS insert a line break after each
 
 RULES:
 - Do NOT mark anything as missing if it appears in the PRESENT list.
+- ALWAYS insert a line break after each heading. 
+- If you use bullets, you MUST insert a line break before each bullet.
 - Use numeric citations [n] only from SOURCES.
 - Do NOT fabricate citations or Course Booklet references.
 - Be concise, didactic, and actionable.

@@ -1447,11 +1447,17 @@ def normalize_bullets_safely(text: str) -> str:
     if not text:
         return text
 
+    # Step 1: Split into lines
     lines = text.splitlines()
     fixed_lines = []
 
     for line in lines:
-        # Normalize bullet prefix: convert '-', '*', or malformed '•' to '• '
+        # Preserve section headings (e.g., '**Suggestions:**')
+        if re.match(r'^\s*\*\*.*\*\*\s*$', line):
+            fixed_lines.append(line.strip())
+            continue
+
+        # Normalize bullet prefix if line starts with bullet-like symbol
         bullet_match = re.match(r'^\s*[-*•]\s*(.+)', line)
         if bullet_match:
             content = bullet_match.group(1).strip()
@@ -1459,10 +1465,13 @@ def normalize_bullets_safely(text: str) -> str:
         else:
             fixed_lines.append(line)
 
-    # Join lines and ensure each bullet starts on a new line
+    # Step 2: Join lines and ensure bullets are on their own lines
     result = "\n".join(fixed_lines)
 
-    # Optional: collapse excessive blank lines
+    # Step 3: Fix cases where bullets are stuck together (e.g., '• text • text')
+    result = re.sub(r'•\s*(.+?)\s*(?=•)', r'• \1\n', result)
+
+    # Step 4: Collapse excessive blank lines
     result = re.sub(r'\n{3,}', '\n\n', result)
 
     return result.strip()

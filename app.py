@@ -256,8 +256,10 @@ def prune_redundant_improvements(student_answer: str, reply: str) -> str:
     def present(pat: str) -> bool:
         return re.search(pat, stu, flags=re.I) is not None
 
-    m = re.search(r"(Can be Improved:|Missing Aspects:|Suggestions:\s*)(.*?)(\n(?:Improvement Tips|Conclusion|📚|Sources used|$))",
-                  reply, flags=re.S | re.I)
+    m = re.search(r"(Missing Aspects:\s*)(.*?)(\n(?:Improvement Tips|Conclusion|📚|Sources used|$))",
+        reply,
+        flags=re.S | re.I
+    )
     if not m:
         return reply
 
@@ -1346,10 +1348,21 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
                                       
     # ---- Load & chunk Course Booklet with page/para/case metadata
     manual_chunks, manual_metas = [], []
+    def retrieve_snippets_with_manual(...):
+    # ...
+    manual_chunks, manual_metas = [], []
+    try:
+        manual_chunks, manual_metas = extract_manual_chunks_with_refs(
+            "assets/EUCapML - Course Booklet.pdf",
+            chunk_words_hint=chunk_words
+        )
+    except Exception as e:
+        st.warning(f"Could not load course manual: {e}")
     try:
         _model_anchors = _anchors_from_model(model_answer_filtered)
     except Exception as _e:
         _model_anchors = []
+
     if _model_anchors:
         alow = [a.lower() for a in _model_anchors]
         mc2, mm2 = [], []
@@ -1358,17 +1371,10 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
             if any(a in txt for a in alow):
                 mc2.append(ch)
                 mm2.append(meta)
-        if mc2:  # only shrink corpus if we keep something
-            manual_chunks, manual_metas = mc2, mm2    
-                                      
-    try:
-        manual_chunks, manual_metas = extract_manual_chunks_with_refs(
-            "assets/EUCapML - Course Booklet.pdf",
-            chunk_words_hint=chunk_words
-        )
-    except Exception as e:
-        st.warning(f"Could not load course manual: {e}")
+        if mc2:  # shrink only if something kept
+            manual_chunks, manual_metas = mc2, mm2
 
+    # (keep the rest unchanged)
 
     # ✅ Filter manual chunks using keywords + the user's query AND case numbers, if any
     selected_q = st.session_state.get("selected_question", "Question 1")
@@ -1425,7 +1431,7 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
     idx = np.argsort(sims)[::-1]
 
     # ✅ Similarity floor to keep only reasonably relevant snippets
-    MIN_SIM = 0.20  # tune 0.10–0.18 if needed
+    MIN_SIM = 0.22  # tune if needed
 
     # ---- Select top snippets grouped by (manual page) or (web page index)
     per_page = {}
@@ -1734,7 +1740,6 @@ def render_sources_used(source_lines: list[str]) -> None:
 
 # --- Citation post-processing & filtering ---
 def parse_cited_indices(text: str) -> list[int]:
-    """Return sorted unique [n] indices used in text."""
     try:
         return sorted(set(int(x) for x in re.findall(r"\[(\d+)\]", text or "")))
     except Exception:
@@ -2359,20 +2364,19 @@ with colA:
                     messages, api_key, model_name=model_name, temperature=temp,
                     first_tokens=1200, continue_tokens=350
                 )
-
+                                
                 reply = enforce_model_consistency(
                     reply,
                     model_answer_filtered,
                     api_key,
                     model_name,
                 )
-  
                 reply = merge_to_suggestions(reply, student_answer, activate=agreement)
                 reply = tidy_empty_sections(reply)
                 reply = prune_redundant_improvements(student_answer, reply)
                 reply = lock_out_false_missing(reply, rubric)
                 reply = enforce_feedback_template(reply)
-                eply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)
+                reply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)
                 
                 if reply:
                     # Safety net: strip any stray “[n]” placeholders
@@ -2465,8 +2469,7 @@ with colB:
                     reply,
                     model_answer_filtered,
                     api_key,
-                    model_name,
-                    st.session_state.get("selected_question", "Question 1"),
+                    model_name,    
                 )
 
                 msgs.append({"role": "system", "content":

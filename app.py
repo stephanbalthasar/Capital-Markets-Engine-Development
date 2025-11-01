@@ -2261,22 +2261,6 @@ with st.sidebar:
             st.exception(e)
     
     # ---- Course Booklet diagnostics ----
-    # ---- Diagnostic to confirm parsing ----
-    with st.sidebar:
-        st.subheader("🔎 Parser check (dev)")
-        test_page = st.number_input("PDF page (1-based)", min_value=1, value=7, step=1)
-        if st.checkbox("Show paragraphs + case-section on this page"):
-            try:
-                doc = fitz.open("assets/EUCapML - Course Booklet.pdf")
-                p = doc.load_page(int(test_page) - 1)
-                para_items, case_starts = _extract_page_paragraphs(p)
-                st.write(f"Case starts on this page: {[c['case'] for c in case_starts] or '—'}")
-                for it in para_items[:15]:
-                    snip = it["text"][:180] + ("…" if len(it["text"]) > 180 else "")
-                    st.write(f"• para {it['para']} (y0={it['y0']:.1f}): {snip}")
-                doc.close()
-            except Exception as e:
-                st.warning(f"Preview failed: {e}")
     
     # ---- Diagnostic to confirm guardrail ----
     with st.expander("🛡️ Consistency guardrail (dev)", expanded=False):

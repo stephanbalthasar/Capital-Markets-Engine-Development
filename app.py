@@ -841,16 +841,25 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
         reply = re.sub(rf"(?im)^\\s*{re.escape(h)}\\s*$", bold_h + "\\n", reply)
 
     # Reformat bullets in Core Claims section
-    m = re.search(r"(?is)(Student's Core Claims:\\s*)(.*?)(\\n(?:\\*\\*Mistakes:\\*\\*|\\*\\*Missing Aspects:\\*\\*|\\*\\*Suggestions:\\*\\*|\\*\\*Conclusion:\\*\\*|$))", reply)
+    # Reformat bullets in Core Claims section
+    m = re.search(r"(?is)(Student's Core Claims:\s*)(.*?)(\n(?:\*\*Mistakes:\*\*|\*\*Missing Aspects:\*\*|\*\*Suggestions:\*\*|\*\*Conclusion:\*\*|$))", reply)
     if m:
         head, body, tail = m.group(1), m.group(2), m.group(3)
-        lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+
+        # Split embedded bullets and normalize
+        raw_lines = re.split(r"\s*•\s*", body)
         fixed = []
-        for ln in lines:
-            ln = re.sub(r"\s*•\s*", "\n• ", ln).strip()
-            ln = re.sub(r"^\s*•\s*", "• ", ln)  # Ensure only one bullet at the start
-            m1 = re.match(r"^\\s*•\\s*(Correct|Incorrect|Not supported)\\s*:?\\s*(.+)$", ln, flags=re.I)
-            m2 = re.match(r"^\\s*•\\s*\\[(Correct|Incorrect|Not supported)\\]\\s*(.+)$", ln, flags=re.I)
+        for ln in raw_lines:
+            ln = ln.strip()
+            if not ln:
+                continue
+            # Remove any leading bullet-like markers
+            ln = re.sub(r"^\s*[•\-*]\s*", "", ln).strip()
+    
+            # Match tagging formats
+            m1 = re.match(r"^(Correct|Incorrect|Not supported)\s*:?[\s]*(.+)$", ln, flags=re.I)
+            m2 = re.match(r"^\[(Correct|Incorrect|Not supported)\]\s*(.+)$", ln, flags=re.I)
+    
             if m1:
                 tag, text = m1.group(1).capitalize(), m1.group(2).strip()
                 fixed.append(f"• {text} — [{tag}]")
@@ -859,13 +868,14 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
                 fixed.append(f"• {text} — [{tag}]")
             else:
                 fixed.append(f"• {ln} — [Not supported]")
-        reply = reply.replace(m.group(0), head + "\n".join(fixed) + tail)
-        reply = re.sub(r"(?<!\n)\s*•\s*", r"\n• ", reply)
-
-    # Remove hallucinated 'Missing Aspects' (already present in student answer)
-    present = set()
-    for row in (rubric or {}).get("per_issue", []):
-        present.update({kw.lower() for kw in row.get("keywords_hit", [])})
+    
+        # Replace the section with cleaned bullets
+        reply = reply.replace(m.group(0), head + "\n" + "\n".join(fixed) + "\n" + tail)
+        
+        # Remove hallucinated 'Missing Aspects' (already present in student answer)
+        present = set()
+        for row in (rubric or {}).get("per_issue", []):
+            present.update({kw.lower() for kw in row.get("keywords_hit", [])})
 
     def _find_section(text, title_regex):
         m = re.search(rf"({title_regex}\\s*)(.*?)(\\n(?:\\*\\*Student's Core Claims:\\*\\*|\\*\\*Mistakes:\\*\\*|\\*\\*Suggestions:\\*\\*|\\*\\*Conclusion:\\*\\*|$))", text, flags=re.S | re.I)

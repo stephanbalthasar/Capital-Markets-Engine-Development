@@ -24,20 +24,6 @@ from bs4 import BeautifulSoup
 APP_HASH = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:10]
 
 # ---------- Public helpers you will call from the app ----------
-def format_bullets(text: str) -> str:
-    """
-    Ensures each bullet point is on its own line for proper Streamlit rendering.
-    Accepts raw text with bullets or plain lines.
-    """
-    import re
-    lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
-    bullets = []
-    for ln in lines:
-        # Remove any existing bullet markers and reformat
-        ln = re.sub(r"^[-•*]\s*", "", ln)
-        bullets.append(f"• {ln}")
-    return "\n".join(bullets)
-
 def bold_section_headings(reply: str) -> str:
     """
     Make core section headings bold and ensure a blank line after each.
@@ -2153,7 +2139,7 @@ with colA:
                 display_source_lines = filter_sources_by_indices(source_lines, used_idxs) or source_lines
             
                 if reply:
-                    st.markdown(format_bullets(reply))
+                    st.markdown(reply)
                 else:
                     st.info("LLM unavailable. See corrections above and the issue breakdown.")
             else:

@@ -24,69 +24,6 @@ from bs4 import BeautifulSoup
 APP_HASH = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:10]
 
 # ---------- Public helpers you will call from the app ----------
-import re
-
-def fix_bullets_in_section(reply: str, section_title: str) -> str:
-    """
-    Ensures that if a section contains bullets, each bullet starts on a new line.
-    Does NOT force bulletization if the section is prose.
-    """
-    pattern = rf"(?is)(\*\*{re.escape(section_title)}:\*\*\s*)(.*?)(?=\n\*\*|\Z)"
-    match = re.search(pattern, reply)
-    if not match:
-        return reply
-
-    head, body = match.group(1), match.group(2)
-    if "•" not in body:
-        return reply  # leave prose untouched
-
-    # Ensure each bullet starts on a new line, but only if not already
-    fixed_body = re.sub(r"(?<!\n)\s*•\s*", r"\n• ", body.strip())
-    new_block = head + "\n" + fixed_body.strip() + "\n"
-    return re.sub(pattern, new_block, reply)
-
-def ensure_clean_bullets(reply: str) -> str:
-    """
-    Ensures that if a section contains bullets, each bullet starts on a new line.
-    Does NOT force bulletization if the section is prose.
-    """
-    import re
-
-    def fix_bullets_in_section(reply: str, section_title: str) -> str:
-        # Match the section block
-        pattern = rf"(?is)(\*\*{re.escape(section_title)}:\*\*\s*)(.*?)(?=\n\*\*|\Z)"
-        match = re.search(pattern, reply)
-        if not match:
-            return reply
-
-        head, body = match.group(1), match.group(2)
-
-        # Only fix if bullets are present
-        if "•" not in body:
-            return reply
-
-        # Ensure each bullet starts on a new line (but not if already)
-        fixed_body = re.sub(r"(?<!\n)[ \t]*•[ \t]*", r"\n• ", body.strip())
-
-        # Rebuild the section
-        new_block = head + "\n" + fixed_body.strip() + "\n"
-        return re.sub(pattern, new_block, reply)
-
-    # Apply to all relevant sections
-    for section in [
-        "Student's Core Claims",
-        "Mistakes",
-        "Missing Aspects",
-        "Suggestions",
-        "Improvement Tips",
-        "Conclusion"
-    ]:
-        reply = fix_bullets_in_section(reply, section)
-
-    # Clean up excessive blank lines
-    reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
-    return reply    
-
 def bold_section_headings(reply: str) -> str:
     """
     Make core section headings bold and ensure a blank line after each.
@@ -2196,7 +2133,6 @@ with colA:
                 reply = enforce_feedback_template(reply)
                 reply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)
                 reply = bold_section_headings(reply)
-                reply = ensure_clean_bullets(reply)
                 reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
             
                 used_idxs = parse_cited_indices(reply)

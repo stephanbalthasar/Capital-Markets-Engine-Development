@@ -93,10 +93,10 @@ def prune_redundant_improvements(student_answer: str, reply: str) -> str:
     def present(pat: str) -> bool:
         return re.search(pat, stu, flags=re.I) is not None
 
-    m = re.search(r"(Missing Aspects:\s*)(.*?)(\n(?:Improvement Tips|Conclusion|📚|Sources used|$))",
+    m = re.search(r"(Missing Aspects:\s*)(.*?)(\n(?:Conclusion|📚|Sources used|$))",
         reply,
         flags=re.S | re.I
-    )
+    )    
     if not m:
         return reply
 
@@ -644,7 +644,7 @@ def _find_section(text: str, title_regex: str):
     """
     import re
     m = re.search(
-        rf"({title_regex}\s*)(.*?)(\n(?:Student's Core Claims:|Incorrect Claims:|Missing Aspects:|Suggestions:|Improvement Tips|Conclusion|📚|Sources used|$))",
+        rf"({title_regex}\s*)(.*?)(\n(?:Student's Core Claims:|Incorrect Claims:|Missing Aspects:|Suggestions:|Conclusion|📚|Sources used|$))",
         text,
         flags=re.S | re.I,
     )
@@ -720,11 +720,11 @@ def tidy_empty_sections(reply: str) -> str:
         return reply
     import re
     # Remove empty sections like 'Missing Aspects:' followed by '—' or blank lines
-    reply = re.sub(r"(Missing Aspects:\s*)(?:—\s*|\s*)(?=\n(?:Improvement Tips|Conclusion|📚|Sources used|$))",
+    reply = re.sub(r"(Missing Aspects:\s*)(?:—\s*|\s*)(?=\n(?:Conclusion|📚|Sources used|$))",
                    "", reply, flags=re.S | re.I)
-    reply = re.sub(r"(Incorrect Claims:\s*)(?:—\s*|\s*)(?=\n(?:Missing Aspects|Improvement Tips|Conclusion|📚|Sources used|$))",
+    reply = re.sub(r"(Incorrect Claims:\s*)(?:—\s*|\s*)(?=\n(?:Missing Aspects|Conclusion|📚|Sources used|$))",
                    "", reply, flags=re.S | re.I)
-    reply = re.sub(r"(Suggestions:\s*)(?:—\s*|\s*)(?=\n(?:Improvement Tips|Conclusion|📚|Sources used|$))",
+    reply = re.sub(r"(Suggestions:\s*)(?:—\s*|\s*)(?=\n(?:Conclusion|📚|Sources used|$))",
                    "", reply, flags=re.S | re.I)
     return reply
 
@@ -1410,7 +1410,7 @@ def enforce_feedback_template(reply: str) -> str:
     - Rename 'CLAIMS:' to 'Student's Core Claims:' if model drifted.
     - Collapse duplicate 'Correct. This claim aligns...' lines.
     - Normalise odd bullet artifacts such as 'Suggestions: • • None. •'
-    - Ensure empty 'Improvement Tips'/'Missing Aspects' show as '—'
+    - Ensure empty sections show as '—'
     """
     if not reply:
         return reply

@@ -1371,6 +1371,31 @@ RULES:
 - ≤400 words total.
 """.strip()
 
+def lock_out_false_mistakes(reply: str, rubric: dict) -> str:
+    """
+    Removes any 'Mistakes' bullet that mentions a keyword already present in the student's answer.
+    """
+    if not reply or not rubric:
+        return reply
+
+    present = {kw.lower() for row in rubric.get("per_issue", []) for kw in row.get("keywords_hit", [])}
+    m = re.search(r"(?is)(\*\*Mistakes:\*\*\s*)(.*?)(?=\n\*\*|$)", reply)
+    if not m:
+        return reply
+
+    head, body = m.group(1), m.group(2)
+    bullets = [b.strip() for b in re.split(r"\s*•\s*", body) if b.strip()]
+    kept = []
+
+    for b in bullets:
+        low = b.lower()
+        if any(p in low for p in present):
+            continue  # Drop hallucinated mistake
+        kept.append(f"• {b}")
+
+    new_block = head + ("\n".join(kept) if kept else "—") + "\n"
+    return reply.replace(m.group(0), new_block)
+
 def lock_out_false_missing(reply: str, rubric: dict) -> str:
     """
     Removes any 'Missing Aspects' bullet whose text contains a keyword we already
@@ -2094,6 +2119,7 @@ with colA:
                 reply = merge_to_suggestions(reply, student_answer, activate=agreement)
                 reply = tidy_empty_sections(reply)
                 reply = prune_redundant_improvements(student_answer, reply)
+                reply = lock_out_false_mistakes(reply, rubric)
                 reply = lock_out_false_missing(reply, rubric)
                 reply = enforce_feedback_template(reply)
                 reply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)

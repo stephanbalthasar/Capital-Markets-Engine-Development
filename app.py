@@ -1383,19 +1383,19 @@ AUTO-DETECTED EVIDENCE:
 
 OUTPUT FORMAT (use EXACTLY these headings):
 
-Student's Core Claims:
+**Student's Core Claims:**
 • <claim> — [Correct|Incorrect|Not supported]
 
-Mistakes:
+**Mistakes:**
 • <incorrect claim> — Explanation of why it is incorrect [n]
 
-Missing Aspects:
+**Missing Aspects:**
 • <missing concept> — Explanation of why it matters [n]
 
-Suggestions:
+**Suggestions**
 • <optional suggestion to improve clarity or depth> [n]
 
-Conclusion:
+**Conclusion:**
 <one-sentence summary>
 
 RULES:

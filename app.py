@@ -1263,6 +1263,8 @@ def system_guardrails():
         "- Summarize or paraphrase concepts; do not copy long passages.\n\n"
         "FACT-CHECKING RULE:\\n"
         "- Do **not** mark something as 'Missing' if it appears in the PRESENT list provided in the prompt.\\n\\n"
+        "OUTPUT LAYOUT:\\n"
+        "- If you return a list of bullets, return a new line for each bullet."
         "STYLE:\n"
         "- Be concise, didactic, and actionable.\n"
         "- Use ≤400 words, no new sections.\n"

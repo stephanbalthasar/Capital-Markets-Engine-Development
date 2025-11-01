@@ -632,7 +632,7 @@ def agreement_prompt_prelude(agreement: bool) -> str:
         "IMPORTANT RULES (agreement mode):\n"
         "- If the student's claim matches the MODEL ANSWER, label it \"Correct\".\n"
         "- If you want to add extra legal points (other provisions, edge cases, policy), put them under a section titled "
-        "\"Suggestions\" (or \"Further Considerations\"). Do NOT put them under 'Incorrect Claims'.\n"
+        "\"Suggestions\" (or \"Further Considerations\"). Do NOT put them under 'Mistakes'.\n"
         "- Never mark a claim as 'Incorrect' unless it directly contradicts the MODEL ANSWER.\n\n"
     )
 
@@ -644,7 +644,7 @@ def _find_section(text: str, title_regex: str):
     """
     import re
     m = re.search(
-        rf"({title_regex}\s*)(.*?)(\n(?:Student's Core Claims:|Incorrect Claims:|Missing Aspects:|Suggestions:|Conclusion|📚|Sources used|$))",
+        rf"({title_regex}\s*)(.*?)(\n(?:Student's Core Claims:|Mistakes:|Missing Aspects:|Suggestions:|Conclusion|📚|Sources used|$))",
         text,
         flags=re.S | re.I,
     )
@@ -666,14 +666,14 @@ def _neutralise_error_tone(line: str) -> str:
 
 def merge_to_suggestions(reply: str, student_answer: str, activate: bool = True) -> str:
     """
-    When activated (agreement mode), remove 'Incorrect Claims' and 'Missing Aspects'
+    When activated (agreement mode), remove 'Mistakes' and 'Missing Aspects'
     sections and merge their content into a neutral 'Suggestions:' section.
     """
     if not reply or not activate:
         return reply
 
     # 1) Extract both sections (if any)
-    inc_head, inc_body, inc_tail, inc_span = _find_section(reply, r"Incorrect Claims:")
+    inc_head, inc_body, inc_tail, inc_span = _find_section(reply, r"Mistakes:")
     mis_head, mis_body, mis_tail, mis_span = _find_section(reply, r"Missing Aspects:")
 
     if not any([inc_head, mis_head]):
@@ -722,7 +722,7 @@ def tidy_empty_sections(reply: str) -> str:
     # Remove empty sections like 'Missing Aspects:' followed by '—' or blank lines
     reply = re.sub(r"(Missing Aspects:\s*)(?:—\s*|\s*)(?=\n(?:Conclusion|📚|Sources used|$))",
                    "", reply, flags=re.S | re.I)
-    reply = re.sub(r"(Incorrect Claims:\s*)(?:—\s*|\s*)(?=\n(?:Missing Aspects|Conclusion|📚|Sources used|$))",
+    reply = re.sub(r"(Mistakes:\s*)(?:—\s*|\s*)(?=\n(?:Missing Aspects|Conclusion|📚|Sources used|$))",
                    "", reply, flags=re.S | re.I)
     reply = re.sub(r"(Suggestions:\s*)(?:—\s*|\s*)(?=\n(?:Conclusion|📚|Sources used|$))",
                    "", reply, flags=re.S | re.I)
@@ -792,7 +792,7 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
 
     # Normalize headings
     reply = re.sub(r"(?im)^\\s*CLAIMS\\s*:\\s*$", "Student's Core Claims:", reply)
-    reply = re.sub(r"(?im)^\\s*Incorrect Claims\\s*:\\s*$", "Mistakes:", reply)
+    reply = re.sub(r"(?im)^\\s*Mistakes\\s*:\\s*$", "Mistakes:", reply)
     reply = re.sub(r"(?im)^\\s*Missing Aspects\\s*:\\s*$", "Missing Aspects:", reply)
     reply = re.sub(r"(?im)^\\s*Suggestions\\s*:\\s*$", "Suggestions:", reply)
     reply = re.sub(r"(?im)^\\s*Conclusion\\s*:\\s*$", "Conclusion:", reply)

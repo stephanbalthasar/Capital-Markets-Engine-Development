@@ -57,6 +57,29 @@ def bold_section_headings(reply: str) -> str:
     reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
     return reply
 
+import re
+
+def normalize_bullets(text: str) -> str:
+    """
+    Ensures each bullet point starts on a new line and is properly formatted.
+    Converts malformed bullets like '-text' or '*text' into '• text'.
+    """
+    if not text:
+        return text
+    # Step 1: Replace all bullet variants at line start with a clean '• '
+    text = re.sub(r'(?m)^\s*[-*•]\s*', '• ', text)
+
+    # Step 2: Ensure each bullet starts on a new line (but not inside a paragraph)
+    text = re.sub(r'(?<!\n)\s*•\s*', r'\n• ', text)
+
+    # Step 3: Remove duplicate bullets (e.g., '• • text')
+    text = re.sub(r'(?m)^•\s*•\s*', '• ', text)
+
+    # Step 4: Collapse excessive blank lines
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    return text.strip()
+
 def _anchors_from_model(model_answer_slice: str, cap: int = 20) -> list[str]:
     s = model_answer_slice or ""
     acr = re.findall(r"\b[A-ZÄÖÜ]{2,6}\b", s)                        # MAR, PR, TD, WpHG, ...
@@ -2098,6 +2121,7 @@ with colA:
                 reply = enforce_feedback_template(reply)
                 reply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)
                 reply = bold_section_headings(reply)
+                reply = normalize_bullets(reply)
                 reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
             
                 used_idxs = parse_cited_indices(reply)

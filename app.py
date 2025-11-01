@@ -807,37 +807,34 @@ def _presence_set(student_answer: str, model_answer_slice: str) -> set[str]:
 
     return present
 
+def format_feedback_and_filter_missing(reply: str, student_answer: str, model_answer_slice: str, rubric: dict) -> str:
+    """
+    Clean and format feedback into clear sections:
+    - Student's Core Claims
+    - Missing Aspects
+    - Improvement Tips
+    - Suggestions
+    - Conclusion
+    """
+    import re
 
-def format_feedback_and_filter_missing(reply: str,
-                                       student_answer: str,
-                                       model_answer_slice: str,
-                                       rubric: dict) -> str:
-    """
-    1) Ensure headings have a blank line after them.
-    2) Standardise core-claim bullets to: '• <claim> — [Correct]'.
-    3) Remove any 'Missing Aspects' bullet that mentions a concept we found in the student's answer.
-    4) Keep 'Suggestions/Improvement Tips' bullets strictly under their headings.
-    """
     if not reply:
         return reply
 
-    # --- 1) Headings on their own line
-    for h in [r"Student's Core Claims:", r"Missing Aspects:", r"Improvement Tips", r"Suggestions:", r"Conclusion:"]:
-        reply = re.sub(rf"(?im)^\s*{re.escape(h)}\s*", f"{h}\n", reply)
+    # Ensure headings are on their own line
+    for h in ["Student's Core Claims:", "Missing Aspects:", "Improvement Tips", "Suggestions:", "Conclusion:"]:
+        reply = re.sub(rf"(?im)^\\s*{re.escape(h)}\\s*", f"{h}\n", reply)
 
-    # --- 2) Reformat claim bullets: put the tag at the end, never touching parentheses in cites
+    # Reformat bullets in Core Claims section
     m = re.search(r"(?is)(Student's Core Claims:\s*)(.*?)(\n(?:Missing Aspects:|Improvement Tips|Suggestions:|Conclusion:|$))", reply)
     if m:
         head, body, tail = m.group(1), m.group(2), m.group(3)
         lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
         fixed = []
         for ln in lines:
-            ln = re.sub(r"^\s*(?:•|-|\*)\s*", "• ", ln)
-            # cases:
-            #  a) "• Correct: text"  -> "• text — [Correct]"
-            m1 = re.match(r"^\s*•\s*(Correct|Incorrect|Not supported)\s*:?\s*(.+)$", ln, flags=re.I)
-            #  b) "• [Correct] text" -> "• text — [Correct]"
-            m2 = re.match(r"^\s*•\s*\[(Correct|Incorrect|Not supported)\]\s*(.+)$", ln, flags=re.I)
+            ln = re.sub(r"^\\s*(?:•|-|\\*)\\s*", "• ", ln)
+            m1 = re.match(r"^\\s*•\\s*(Correct|Incorrect|Not supported)\\s*:?\\s*(.+)$", ln, flags=re.I)
+            m2 = re.match(r"^\\s*•\\s*\\[(Correct|Incorrect|Not supported)\\]\\s*(.+)$", ln, flags=re.I)
             if m1:
                 tag, text = m1.group(1).capitalize(), m1.group(2).strip()
                 fixed.append(f"• {text} — [{tag}]")
@@ -845,28 +842,27 @@ def format_feedback_and_filter_missing(reply: str,
                 tag, text = m2.group(1).capitalize(), m2.group(2).strip()
                 fixed.append(f"• {text} — [{tag}]")
             else:
-                # default tag if the model forgot one
-                fixed.append(f"• {re.sub(r'^\s*•\s*', '', ln)} — [Not supported]")
+                fixed.append(f"• {re.sub(r'^\\s*•\\s*', '', ln)} — [Not supported]")
         reply = reply.replace(m.group(0), head + "\n".join(fixed) + tail)
 
-    # --- 3) Remove hallucinated 'Missing Aspects' (present in student's answer)
-    present = _presence_set(student_answer, model_answer_slice)
-    head, body, tail, span = _find_section(reply, r"Missing Aspects:")
+    # Remove hallucinated 'Missing Aspects' (already present in student answer)
+    present = set()
+    for row in (rubric or {}).get("per_issue", []):
+        present.update({kw.lower() for kw in row.get("keywords_hit", [])})
+    def _find_section(text, title_regex):
+        m = re.search(rf"({title_regex}\\s*)(.*?)(\\n(?:Student's Core Claims:|Improvement Tips|Suggestions:|Conclusion:|$))", text, flags=re.S | re.I)
+        return m.groups() if m else (None, None, None)
+    def _bulletize(text):
+        return [f"• {ln.strip()}" for ln in text.strip().splitlines() if ln.strip()]
+    head, body, tail = _find_section(reply, r"Missing Aspects:")
     if head:
         bullets = _bulletize(body)
-        kept = []
-        for b in bullets:
-            low = b.lower()
-            # drop bullet if any present marker appears verbatim inside it
-            if any(p in low for p in present):
-                continue
-            kept.append(b)
+        kept = [b for b in bullets if not any(p in b.lower() for p in present)]
         reply = reply.replace(head + body + tail, head + ("\n".join(kept) + "\n" if kept else "—\n") + tail)
 
-    # --- 4) Keep 'Suggestions/Improvement Tips' content strictly under headings (collapse stray lists)
-    # If there's 'Suggestions:' ensure any bullet block between 'Suggestions:' and the next heading is inside that section.
-    # Already handled by your renderer; we only tidy spacing here.
+    # Collapse excessive blank lines
     reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
+
     return reply
 
 # =======================

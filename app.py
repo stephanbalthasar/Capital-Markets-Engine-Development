@@ -1332,7 +1332,7 @@ EXCERPTS (quote sparingly; cite using [1], [2], …):
 {excerpts_block}
 
 AUTO-DETECTED EVIDENCE:
-- PRESENT in student's answer (DO NOT MARK THESE AS MISSING):
+- PRESENT in student's answer (DO NOT MARK THESE AS MISTAKES or MISSING ASPECTS):
 {present_block}
 
 - POTENTIALLY MISSING (only mark as missing if truly absent AND material):

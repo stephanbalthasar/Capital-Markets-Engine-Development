@@ -847,7 +847,8 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
         lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
         fixed = []
         for ln in lines:
-            ln = re.sub(r"^\\s*[•\\-*]\\s*", "• ", ln)
+            ln = re.sub(r"^\s*[•\-*]\s*", "", ln).strip()
+            ln = f"• {ln}"
             m1 = re.match(r"^\\s*•\\s*(Correct|Incorrect|Not supported)\\s*:?\\s*(.+)$", ln, flags=re.I)
             m2 = re.match(r"^\\s*•\\s*\\[(Correct|Incorrect|Not supported)\\]\\s*(.+)$", ln, flags=re.I)
             if m1:
@@ -1313,6 +1314,7 @@ def system_guardrails():
         "- Use ≤400 words, no new sections.\n"
         "- Finish with a single explicit concluding sentence.\n"
         "- Write in the same language as the student's answer when possible (if mixed, default to English)."
+        "- If you use bullet points in any section, ensure each bullet starts on a new line and is clearly separated from others."
     )
 
 def _flatten_hits_misses_from_rubric(rubric: dict) -> tuple[list[str], list[str]]:

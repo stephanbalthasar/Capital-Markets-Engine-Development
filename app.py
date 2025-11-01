@@ -24,18 +24,6 @@ from bs4 import BeautifulSoup
 APP_HASH = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:10]
 
 # ---------- Public helpers you will call from the app ----------
-def fix_bullet_spacing(reply: str) -> str:
-    """
-    Ensures each bullet point starts on a new line.
-    Leaves headings and other formatting untouched.
-    """
-    import re
-    # Add a newline before each bullet if it's not already at the start of a line
-    reply = re.sub(r'(?<!\n)\s*•\s*', r'\n• ', reply)
-    # Collapse excessive blank lines
-    reply = re.sub(r'\n{3,}', '\n\n', reply)
-    return reply.strip()
-
 def bold_section_headings(reply: str) -> str:
     """
     Make core section headings bold and ensure a blank line after each.
@@ -2151,7 +2139,7 @@ with colA:
                 display_source_lines = filter_sources_by_indices(source_lines, used_idxs) or source_lines
             
                 if reply:
-                    st.markdown(fix_bullet_spacing(reply))
+                    st.markdown(reply)
                 else:
                     st.info("LLM unavailable. See corrections above and the issue breakdown.")
             else:

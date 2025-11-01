@@ -57,27 +57,6 @@ def bold_section_headings(reply: str) -> str:
     reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
     return reply
 
-import re
-
-def split_inline_bullets(text: str) -> str:
-    """
-    Ensures each bullet point starts on a new line.
-    Works even if multiple bullets are crammed into one paragraph.
-    """
-    if not text:
-        return text
-
-    # Step 1: Insert newline before each bullet (except the first one in a line)
-    text = re.sub(r'(?<!\n)\s*•\s*', r'\n• ', text)
-
-    # Step 2: Remove accidental double bullets
-    text = re.sub(r'\n•\s*•\s*', r'\n• ', text)
-
-    # Step 3: Collapse excessive blank lines
-    text = re.sub(r'\n{3,}', '\n\n', text)
-
-    return text.strip()
-
 def _anchors_from_model(model_answer_slice: str, cap: int = 20) -> list[str]:
     s = model_answer_slice or ""
     acr = re.findall(r"\b[A-ZÄÖÜ]{2,6}\b", s)                        # MAR, PR, TD, WpHG, ...
@@ -1368,6 +1347,7 @@ AUTO-DETECTED EVIDENCE:
 {missing_block}
 
 OUTPUT FORMAT (use EXACTLY these headings):
+Each bullet must start on a new line.
 
 **Student's Core Claims:**
 • <claim> — [Correct|Incorrect|Not supported]
@@ -2119,7 +2099,6 @@ with colA:
                 reply = enforce_feedback_template(reply)
                 reply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)
                 reply = bold_section_headings(reply)
-                reply = split_inline_bullets(reply)
                 reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
             
                 used_idxs = parse_cited_indices(reply)

@@ -35,14 +35,12 @@ def bold_section_headings(reply: str) -> str:
 
     # 1) Canonicalise a few heading variants (defensive)
     reply = re.sub(r"(?im)^\s*CLAIMS\s*:\s*$", "Student's Core Claims:", reply)
-    reply = re.sub(r"(?im)^\s*Improvement Tips(?:\s*\([^)]*\))?\s*:\s*$", "Improvement Tips:", reply)
-
+    
     # 2) Bold-format the canonical headings
     patterns = {
         r"(?im)^\s*Student's Core Claims:\s*$": "**Student's Core Claims:**",
         r"(?im)^\s*Missing Aspects:\s*$":        "**Missing Aspects:**",
         r"(?im)^\s*Suggestions:\s*$":            "**Suggestions:**",
-        r"(?im)^\s*Improvement Tips:\s*$":       "**Improvement Tips:**",
         r"(?im)^\s*Conclusion:\s*$":             "**Conclusion:**",
     }
     for pat, repl in patterns.items():
@@ -50,7 +48,7 @@ def bold_section_headings(reply: str) -> str:
 
     # 3) Guarantee exactly one newline after any bold heading
     reply = re.sub(
-        r"(?m)^(?:\*\*Student's Core Claims:\*\*|\*\*Missing Aspects:\*\*|\*\*Suggestions:\*\*|\*\*Improvement Tips:\*\*|\*\*Conclusion:\*\*)(?:[ \t]*)$",
+        r"(?m)^(?:\*\*Student's Core Claims:\*\*|\*\*Missing Aspects:\*\*|\*\*Suggestions:\*\*|\*\*Conclusion:\*\*)(?:[ \t]*)$",
         lambda m: m.group(0) + "\n",
         reply,
     )
@@ -701,18 +699,11 @@ def merge_to_suggestions(reply: str, student_answer: str, activate: bool = True)
     parts.append(reply[last:])
     tmp = "".join(parts)
 
-    # 4) Insert Suggestions before Improvement Tips (preferred) or before Conclusion
+    # 4) Insert Suggestions before Conclusion
     import re
     suggestions_block = ""
     if suggestions:
         suggestions_block = "Suggestions:\n" + "\n".join(suggestions) + "\n\n"
-
-    # try to insert before 'Improvement Tips'
-    tip_sec = re.search(r"\n(?=Improvement Tips\b)", tmp, flags=re.I)
-    if tip_sec:
-        idx = tip_sec.start()
-        return tmp[:idx] + "\n" + suggestions_block + tmp[idx:]
-    # else insert before 'Conclusion'
     concl_sec = re.search(r"\n(?=Conclusion\b)", tmp, flags=re.I)
     if concl_sec:
         idx = concl_sec.start()
@@ -1435,7 +1426,7 @@ def enforce_feedback_template(reply: str) -> str:
     reply = re.sub(r"(?im)(Suggestions:)\s*•\s*None\.?\s*(?:•\s*)*$", r"\1\n—", reply)
 
     # 4) If a heading is present but no content, replace with '—'
-    for title in ["Missing Aspects:", "Improvement Tips", "Suggestions:"]:
+    for title in ["Missing Aspects:", "Suggestions:"]:
         reply = re.sub(
             rf"(?is)({re.escape(title)}\s*)(?:-+\s*|\s*)\n?(?=\n|$)",
             r"\1—\n",

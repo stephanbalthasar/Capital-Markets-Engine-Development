@@ -38,19 +38,17 @@ def ensure_clean_bullets(reply: str) -> str:
             return reply
 
         head, body = match.group(1), match.group(2)
-        # Check if bullets are present
         if "•" not in body:
             return reply  # leave prose untouched
 
-        # Ensure each bullet starts on a new line
-        fixed_body = re.sub(r"\s*•\s*", r"\n• ", body.strip())
+        # Only insert newline before bullet if not already present
+        fixed_body = re.sub(r"(?<!\n)\s*•\s*", r"\n• ", body.strip())
         new_block = head + "\n" + fixed_body.strip() + "\n"
         return re.sub(pattern, new_block, reply)
 
     for section in ["Student's Core Claims", "Mistakes", "Missing Aspects", "Suggestions", "Improvement Tips", "Conclusion"]:
-        reply = fix_bullets_in_section(section)
+        reply = fix_bullets_in_section(reply)
 
-    # Collapse excessive blank lines
     reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
     return reply
 

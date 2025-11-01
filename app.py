@@ -809,30 +809,45 @@ def _presence_set(student_answer: str, model_answer_slice: str) -> set[str]:
 
 def format_feedback_and_filter_missing(reply: str, student_answer: str, model_answer_slice: str, rubric: dict) -> str:
     """
-    Clean and format feedback into clear sections:
+    Reformats feedback into five clear sections:
     - Student's Core Claims
+    - Mistakes
     - Missing Aspects
-    - Improvement Tips
     - Suggestions
     - Conclusion
+    Each section is formatted with bullet points and explanations where needed.
     """
     import re
 
     if not reply:
         return reply
 
-    # Ensure headings are on their own line
-    for h in ["Student's Core Claims:", "Missing Aspects:", "Improvement Tips", "Suggestions:", "Conclusion:"]:
-        reply = re.sub(rf"(?im)^\\s*{re.escape(h)}\\s*", f"{h}\n", reply)
+    # Normalize headings
+    reply = re.sub(r"(?im)^\\s*CLAIMS\\s*:\\s*$", "Student's Core Claims:", reply)
+    reply = re.sub(r"(?im)^\\s*Incorrect Claims\\s*:\\s*$", "Mistakes:", reply)
+    reply = re.sub(r"(?im)^\\s*Missing Aspects\\s*:\\s*$", "Missing Aspects:", reply)
+    reply = re.sub(r"(?im)^\\s*Suggestions\\s*:\\s*$", "Suggestions:", reply)
+    reply = re.sub(r"(?im)^\\s*Conclusion\\s*:\\s*$", "Conclusion:", reply)
+
+    # Bold headings and ensure spacing
+    headings = {
+        "Student's Core Claims:": "**Student's Core Claims:**",
+        "Mistakes:": "**Mistakes:**",
+        "Missing Aspects:": "**Missing Aspects:**",
+        "Suggestions:": "**Suggestions:**",
+        "Conclusion:": "**Conclusion:**"
+    }
+    for h, bold_h in headings.items():
+        reply = re.sub(rf"(?im)^\\s*{re.escape(h)}\\s*$", bold_h + "\\n", reply)
 
     # Reformat bullets in Core Claims section
-    m = re.search(r"(?is)(Student's Core Claims:\s*)(.*?)(\n(?:Missing Aspects:|Improvement Tips|Suggestions:|Conclusion:|$))", reply)
+    m = re.search(r"(?is)(Student's Core Claims:\\s*)(.*?)(\\n(?:\\*\\*Mistakes:\\*\\*|\\*\\*Missing Aspects:\\*\\*|\\*\\*Suggestions:\\*\\*|\\*\\*Conclusion:\\*\\*|$))", reply)
     if m:
         head, body, tail = m.group(1), m.group(2), m.group(3)
         lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
         fixed = []
         for ln in lines:
-            ln = re.sub(r"^\\s*(?:•|-|\\*)\\s*", "• ", ln)
+            ln = re.sub(r"^\\s*[•\\-*]\\s*", "• ", ln)
             m1 = re.match(r"^\\s*•\\s*(Correct|Incorrect|Not supported)\\s*:?\\s*(.+)$", ln, flags=re.I)
             m2 = re.match(r"^\\s*•\\s*\\[(Correct|Incorrect|Not supported)\\]\\s*(.+)$", ln, flags=re.I)
             if m1:
@@ -842,19 +857,22 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
                 tag, text = m2.group(1).capitalize(), m2.group(2).strip()
                 fixed.append(f"• {text} — [{tag}]")
             else:
-                fixed.append(f"• {re.sub(r'^\\s*•\\s*', '', ln)} — [Not supported]")
+                fixed.append(f"• {ln} — [Not supported]")
         reply = reply.replace(m.group(0), head + "\n".join(fixed) + tail)
 
     # Remove hallucinated 'Missing Aspects' (already present in student answer)
     present = set()
     for row in (rubric or {}).get("per_issue", []):
         present.update({kw.lower() for kw in row.get("keywords_hit", [])})
+
     def _find_section(text, title_regex):
-        m = re.search(rf"({title_regex}\\s*)(.*?)(\\n(?:Student's Core Claims:|Improvement Tips|Suggestions:|Conclusion:|$))", text, flags=re.S | re.I)
+        m = re.search(rf"({title_regex}\\s*)(.*?)(\\n(?:\\*\\*Student's Core Claims:\\*\\*|\\*\\*Mistakes:\\*\\*|\\*\\*Suggestions:\\*\\*|\\*\\*Conclusion:\\*\\*|$))", text, flags=re.S | re.I)
         return m.groups() if m else (None, None, None)
+
     def _bulletize(text):
         return [f"• {ln.strip()}" for ln in text.strip().splitlines() if ln.strip()]
-    head, body, tail = _find_section(reply, r"Missing Aspects:")
+
+    head, body, tail = _find_section(reply, r"\\*\\*Missing Aspects:\\*\\*")
     if head:
         bullets = _bulletize(body)
         kept = [b for b in bullets if not any(p in b.lower() for p in present)]
@@ -1319,19 +1337,18 @@ def _flatten_hits_misses_from_rubric(rubric: dict) -> tuple[list[str], list[str]
     # Keep lists reasonably short for the prompt
     return present[:30], missing[:30]
 
-
-def build_feedback_prompt(student_answer: str,
-                          rubric: dict,
-                          model_answer: str,
-                          sources_block: str,
-                          excerpts_block: str) -> str:
+def build_feedback_prompt(student_answer: str, rubric: dict, model_answer: str, sources_block: str, excerpts_block: str) -> str:
     """
-    STRICT prompt: we feed the LLM our deterministic 'present'/'missing' signals
-    and require it NOT to claim something is missing if we've detected it.
-    We also give a compact output template to avoid redundancy.
+    Prompt for LLM to generate feedback in 5 structured sections:
+    - Student's Core Claims
+    - Mistakes
+    - Missing Aspects
+    - Suggestions
+    - Conclusion
     """
     issue_names = [row["issue"] for row in rubric.get("per_issue", [])]
-    present, missing = _flatten_hits_misses_from_rubric(rubric)
+    present = [kw for row in rubric.get("per_issue", []) for kw in row.get("keywords_hit", [])]
+    missing = [kw for m in rubric.get("missing", []) for kw in m.get("missed_keywords", [])]
 
     present_block = "• " + "\n• ".join(present) if present else "—"
     missing_block = "• " + "\n• ".join(missing) if missing else "—"
@@ -1346,9 +1363,7 @@ RUBRIC SUMMARY:
 - Similarity to model answer: {rubric.get('similarity_pct', 0)}%
 - Issue coverage: {rubric.get('coverage_pct', 0)}%
 - Overall score: {rubric.get('final_score', 0)}%
-
-RUBRIC ISSUES TO COVER:
-- {", ".join(issue_names) if issue_names else "—"}
+- Issues to cover: {", ".join(issue_names) if issue_names else "—"}
 
 MODEL ANSWER (AUTHORITATIVE):
 \"\"\"{model_answer}\"\"\"
@@ -1359,34 +1374,37 @@ SOURCES (numbered; cite using [1], [2], … ONLY from this list):
 EXCERPTS (quote sparingly; cite using [1], [2], …):
 {excerpts_block}
 
-AUTO-DETECTED EVIDENCE (deterministic; use as ground truth):
+AUTO-DETECTED EVIDENCE:
 - PRESENT in student's answer (DO NOT MARK THESE AS MISSING):
 {present_block}
 
 - POTENTIALLY MISSING (only mark as missing if truly absent AND material):
 {missing_block}
 
-OUTPUT TEMPLATE (use EXACTLY these headings; ≤250 words total):
+OUTPUT FORMAT (use EXACTLY these headings):
+
 Student's Core Claims:
-• (Correct|Incorrect|Not supported) <short claim> [optional 1-line why if Incorrect]
+• <claim> — [Correct|Incorrect|Not supported]
+
+Mistakes:
+• <incorrect claim> — Explanation of why it is incorrect [n]
 
 Missing Aspects:
-• <short aspect the student truly missed> [n]
+• <missing concept> — Explanation of why it matters [n]
 
-Improvement Tips (1–3):
-• <concise, actionable tip tied to the rubric> [n]
+Suggestions:
+• <optional suggestion to improve clarity or depth> [n]
 
 Conclusion:
-<one sentence>
+<one-sentence summary>
 
-HARD RULES:
-- NEVER say a concept is missing if it appears in the PRESENT list above.
-- Do not repeat long explanations for claims marked Correct; be concise.
-- Keep “Missing Aspects” to truly material points only (≤3 bullets).
-- Use numeric citations [n] only from SOURCES; never fabricate “[n]”.
-- Do not invent Course Booklet page/para/case numbers; cite only the numbered SOURCES.
-- ≤400 words; no extra sections; no preface/postscript.
-"""
+RULES:
+- Do NOT mark anything as missing if it appears in the PRESENT list.
+- Use numeric citations [n] only from SOURCES.
+- Do NOT fabricate citations or Course Booklet references.
+- Be concise, didactic, and actionable.
+- ≤400 words total.
+""".strip()
 
 def lock_out_false_missing(reply: str, rubric: dict) -> str:
     """

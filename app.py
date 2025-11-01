@@ -2426,31 +2426,31 @@ with colA:
                 for sn in tp["snippets"]:
                     excerpts_items.append(f"[{i+1}] {sn}")
             excerpts_block = "\n\n".join(excerpts_items[: max_sources * 3]) if excerpts_items else "(no excerpts)"
-
+            
+            # --- Narrative Feedback (fixed) ---
             st.markdown("### 🧭 Narrative Feedback")
             if api_key:
                 # Trim large blocks *before* building the prompt
                 sources_block = truncate_block(sources_block, 1200)
                 excerpts_block = truncate_block(excerpts_block, 3200)
             
-                # --- Step 3: Hard rule that the reply must not contradict the model answer ---
+                # Hard rule included here with correct quoting (no stray backslash)
                 hard_rule = (
                     "HARD RULE: Do not contradict the MODEL ANSWER. "
                     "If student reasoning conflicts, state the correct conclusion per the MODEL ANSWER and explain briefly.\n\n"
                 )
-
+            
                 messages = [
                     {"role": "system", "content": system_guardrails()},
                     {"role": "user", "content": prelude + hard_rule + build_feedback_prompt(
                         student_answer, rubric, model_answer_filtered, sources_block, excerpts_block
                     )},
                 ]
-                                
+            
                 reply = generate_with_continuation(
                     messages, api_key, model_name=model_name, temperature=temp,
                     first_tokens=1200, continue_tokens=350
                 )
-                                
                 reply = enforce_model_consistency(
                     reply,
                     model_answer_filtered,
@@ -2465,14 +2465,18 @@ with colA:
                 reply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)
                 reply = bold_section_headings(reply)
                 reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
+            
                 used_idxs = parse_cited_indices(reply)
                 display_source_lines = filter_sources_by_indices(source_lines, used_idxs) or source_lines
-                st.markdown(reply)
+            
+                if reply:
+                    st.markdown(reply)
                 else:
                     st.info("LLM unavailable. See corrections above and the issue breakdown.")
             else:
                 st.info("No GROQ_API_KEY found in secrets/env. Deterministic scoring and corrections shown above.")
-
+                display_source_lines = source_lines
+            
             if source_lines:
                 with st.expander("📚 Sources used"):
                     for line in display_source_lines:

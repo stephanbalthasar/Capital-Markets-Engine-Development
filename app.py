@@ -1346,7 +1346,7 @@ AUTO-DETECTED EVIDENCE:
 - POTENTIALLY MISSING (only mark as missing if truly absent AND material):
 {missing_block}
 
-OUTPUT FORMAT (use EXACTLY these headings, insert a line break after each heading, and if you use bullets, each bullet must start on a new line.):
+OUTPUT FORMAT (use EXACTLY these headings. ALWAYS insert a line break after each heading. If you use bullets, you MUST insert a line break before each bullet.):
 
 **Student's Core Claims:**
 • <claim> — [Correct|Incorrect|Not supported]

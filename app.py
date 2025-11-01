@@ -1345,11 +1345,6 @@ def manual_chunk_relevant(text: str, extracted_keywords: list[str], user_query: 
 def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend,
                                   extracted_keywords, user_query: str = "",
                                   top_k_pages=8, chunk_words=170):
-                                      
-    # ---- Load & chunk Course Booklet with page/para/case metadata
-    manual_chunks, manual_metas = [], []
-    def retrieve_snippets_with_manual(...):
-    # ...
     manual_chunks, manual_metas = [], []
     try:
         manual_chunks, manual_metas = extract_manual_chunks_with_refs(

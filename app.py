@@ -575,17 +575,64 @@ def _auto_issues_from_text(text: str, max_issues: int = 8) -> list[dict]:
 
     return issues
 # ---------- Main extractor (no hard-coded topics) ----------
+import re
+from sklearn.feature_extraction.text import TfidfVectorizer
+import numpy as np
+
+def improved_keyword_extraction(text: str, max_keywords: int = 20) -> list[str]:
+    if not text:
+        return []
+
+    # Extract legal anchors
+    acronyms = re.findall(r"\b[A-ZÄÖÜ]{2,6}\b", text)  # MAR, PR, TD, WpHG, etc.
+    articles = re.findall(r"(?i)\b(?:Art\.?|Article)\s*\d+(?:\([^)]+\))*", text)
+    paragraphs = re.findall(r"§\s*\d+[a-z]?(?:\([^)]+\))*", text)
+    cases = re.findall(r"C[-–—]?\d+/\d+", text)
+    named_cases = re.findall(r"\bLafonta\b|\bGeltl\b|\bHypo Real Estate\b", text, flags=re.I)
+
+    legal_anchors = acronyms + articles + paragraphs + cases + named_cases
+
+    # TF-IDF for generic legal terms
+    vec = TfidfVectorizer(ngram_range=(1, 3), max_features=3000, stop_words="english")
+    X = vec.fit_transform([text])
+    terms = vec.get_feature_names_out()
+    tfidf_scores = X.toarray().flatten()
+
+    # Filter out trivial or malformed terms
+    blacklist = set([
+        "requires", "pursuant", "students", "question", "mention", "meaning", "agreement",
+        "shares", "neon", "gerry", "company", "framework", "cfa"
+    ])
+    generic_terms = []
+    for term, score in zip(terms, tfidf_scores):
+        term_clean = term.strip().lower()
+        if len(term_clean) < 3 or term_clean in blacklist:
+            continue
+        if re.search(r"\b(?:requires|pursuant|students|question|mention|meaning)\b", term_clean):
+            continue
+        generic_terms.append((term, score))
+
+    generic_terms_sorted = sorted(generic_terms, key=lambda x: -x[1])
+    top_generic_terms = [term for term, _ in generic_terms_sorted[:max_keywords]]
+
+    # Combine and deduplicate
+    all_keywords = legal_anchors + top_generic_terms
+    seen = set()
+    final_keywords = []
+    for kw in all_keywords:
+        kw_norm = re.sub(r"\s+", " ", kw.strip())
+        if kw_norm.lower() not in seen:
+            seen.add(kw_norm.lower())
+            final_keywords.append(kw_norm)
+
+    return final_keywords[:max_keywords]
+
 def extract_issues_from_model_answer(model_answer: str, llm_api_key: str) -> list[dict]:
-    """
-    Try LLM with strict JSON contract (with two repair retries).
-    If it still fails, fall back to automatic text mining (no hard-coded issues).
-    """
-    # Guard
     model_answer = (model_answer or "").strip()
     if not model_answer:
         return []
 
-    # 1) LLM attempt with strict JSON instructions
+    # Attempt LLM extraction
     sys = "Respond with VALID JSON only: either an array or {\"issues\": [...]}. No prose, no fences."
     user = (
         "Extract the key issues from the MODEL ANSWER.\n"
@@ -597,23 +644,21 @@ def extract_issues_from_model_answer(model_answer: str, llm_api_key: str) -> lis
         {"role": "system", "content": sys},
         {"role": "user", "content": user},
     ]
+
+    from app import call_groq, _try_parse_json, _coerce_issues
+
     raw = call_groq(messages, api_key=llm_api_key, model_name="llama-3.1-8b-instant", temperature=0.0, max_tokens=900)
     parsed = _try_parse_json(raw)
     issues = _coerce_issues(parsed)
 
-    # 2) If parsing failed or no items, try a small JSON-repair step once
-    if not issues and raw:
-        repair_msgs = [
-            {"role": "system", "content": "Fix JSON. Output VALID JSON only (no prose, no fences)."},
-            {"role": "user", "content": f"Make this into valid JSON array (or {{\"issues\": [...]}}):\n{raw}"},
-        ]
-        raw2 = call_groq(repair_msgs, api_key=llm_api_key, model_name="llama-3.1-8b-instant", temperature=0.0, max_tokens=900)
-        parsed2 = _try_parse_json(raw2)
-        issues = _coerce_issues(parsed2)
-
-    # 3) Final fallback: automatic issue mining from text (generic & scalable)
+    # Fallback to improved keyword extraction
     if not issues:
-        issues = _auto_issues_from_text(model_answer, max_issues=8)
+        keywords = improved_keyword_extraction(model_answer, max_keywords=20)
+        issues = [{
+            "name": "Key Legal Concepts",
+            "keywords": keywords,
+            "importance": 10
+        }]
 
     return issues
 

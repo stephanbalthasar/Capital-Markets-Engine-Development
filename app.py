@@ -579,18 +579,22 @@ import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 import numpy as np
 
+import re
+from sklearn.feature_extraction.text import TfidfVectorizer
+import numpy as np
+
 def improved_keyword_extraction(text: str, max_keywords: int = 20) -> list[str]:
     if not text:
         return []
 
-    # Extract legal anchors
-    acronyms = re.findall(r"\b[A-ZÄÖÜ]{2,6}\b", text)  # MAR, PR, TD, WpHG, etc.
-    articles = re.findall(r"(?i)\b(?:Art\.?|Article)\s*\d+(?:\([^)]+\))*", text)
-    paragraphs = re.findall(r"§\s*\d+[a-z]?(?:\([^)]+\))*", text)
+    # Extract legal anchors with law names
+    acronyms = re.findall(r"\b(?:MAR|PR|MiFID II|TD|WpHG|WpÜG)\b", text)
+    articles = re.findall(r"(?i)\b(?:Art\.?|Article)\s*\d+(?:\([^)]+\))*\s*(?:MAR|PR|MiFID II|TD|WpHG|WpÜG)", text)
+    paragraphs = re.findall(r"§\s*\d+[a-z]?(?:\([^)]+\))*\s*(?:WpHG|WpÜG)", text)
     cases = re.findall(r"C[-–—]?\d+/\d+", text)
     named_cases = re.findall(r"\bLafonta\b|\bGeltl\b|\bHypo Real Estate\b", text, flags=re.I)
 
-    legal_anchors = acronyms + articles + paragraphs + cases + named_cases
+    legal_anchors = articles + paragraphs + acronyms + cases + named_cases
 
     # TF-IDF for generic legal terms
     vec = TfidfVectorizer(ngram_range=(1, 3), max_features=3000, stop_words="english")
@@ -599,10 +603,10 @@ def improved_keyword_extraction(text: str, max_keywords: int = 20) -> list[str]:
     tfidf_scores = X.toarray().flatten()
 
     # Filter out trivial or malformed terms
-    blacklist = set([
-        "requires", "pursuant", "students", "question", "mention", "meaning", "agreement",
-        "shares", "neon", "gerry", "company", "framework", "cfa"
-    ])
+    blacklist = {
+        "requires", "pursuant", "students", "question", "mention", "meaning",
+        "agreement", "shares", "neon", "gerry", "company", "framework", "cfa"
+    }
     generic_terms = []
     for term, score in zip(terms, tfidf_scores):
         term_clean = term.strip().lower()

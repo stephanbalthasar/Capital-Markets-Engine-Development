@@ -24,27 +24,6 @@ from bs4 import BeautifulSoup
 APP_HASH = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:10]
 
 # ---------- Public helpers you will call from the app ----------
-import re
-
-def normalize_bullets(text: str) -> str:
-    """
-    Ensures each bullet point starts on a new line and is properly formatted.
-    Converts malformed bullets like '-text' or '*text' into '• text'.
-    """
-    if not text:
-        return text
-
-    # Normalize all bullet types to '•'
-    text = re.sub(r'^\s*[-*•]\s*', '• ', text, flags=re.MULTILINE)
-
-    # Ensure each bullet starts on a new line
-    text = re.sub(r'(?<!\n)(•\s*)', r'\n\1', text)
-
-    # Collapse excessive blank lines
-    text = re.sub(r'\n{3,}', '\n\n', text)
-
-    return text.strip()
-
 def bold_section_headings(reply: str) -> str:
     """
     Make core section headings bold and ensure a blank line after each.
@@ -2119,7 +2098,6 @@ with colA:
                 reply = enforce_feedback_template(reply)
                 reply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)
                 reply = bold_section_headings(reply)
-                reply = normalize_bullets(reply)
                 reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
             
                 used_idxs = parse_cited_indices(reply)

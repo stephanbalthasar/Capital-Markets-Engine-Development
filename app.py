@@ -220,6 +220,41 @@ def _extract_case_studies(doc: fitz.Document) -> Dict[int, Dict[str, Dict[str, U
     return found
 
 # ---------- Public helpers you will call from the app ----------
+def bold_section_headings(reply: str) -> str:
+    """
+    Make core section headings bold and ensure a blank line after each.
+    Safe to call on already-formatted text (idempotent).
+    """
+    if not reply:
+        return reply
+    import re
+
+    # 1) Canonicalise a few heading variants (defensive)
+    reply = re.sub(r"(?im)^\s*CLAIMS\s*:\s*$", "Student's Core Claims:", reply)
+    reply = re.sub(r"(?im)^\s*Improvement Tips(?:\s*\([^)]*\))?\s*:\s*$", "Improvement Tips:", reply)
+
+    # 2) Bold-format the canonical headings
+    patterns = {
+        r"(?im)^\s*Student's Core Claims:\s*$": "**Student's Core Claims:**",
+        r"(?im)^\s*Missing Aspects:\s*$":        "**Missing Aspects:**",
+        r"(?im)^\s*Suggestions:\s*$":            "**Suggestions:**",
+        r"(?im)^\s*Improvement Tips:\s*$":       "**Improvement Tips:**",
+        r"(?im)^\s*Conclusion:\s*$":             "**Conclusion:**",
+    }
+    for pat, repl in patterns.items():
+        reply = re.sub(pat, repl, reply)
+
+    # 3) Guarantee exactly one newline after any bold heading
+    reply = re.sub(
+        r"(?m)^(?:\*\*Student's Core Claims:\*\*|\*\*Missing Aspects:\*\*|\*\*Suggestions:\*\*|\*\*Improvement Tips:\*\*|\*\*Conclusion:\*\*)(?:[ \t]*)$",
+        lambda m: m.group(0) + "\n",
+        reply,
+    )
+
+    # 4) Collapse excessive blank lines
+    reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
+    return reply
+
 def _anchors_from_model(model_answer_slice: str, cap: int = 20) -> list[str]:
     s = model_answer_slice or ""
     acr = re.findall(r"\b[A-ZÄÖÜ]{2,6}\b", s)                        # MAR, PR, TD, WpHG, ...
@@ -2372,6 +2407,9 @@ with colA:
                 reply = lock_out_false_missing(reply, rubric)
                 reply = enforce_feedback_template(reply)
                 reply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)
+                reply = bold_section_headings(reply)
+                reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
+                st.markdown(reply)
                 
                 if reply:
                     # Safety net: strip any stray “[n]” placeholders

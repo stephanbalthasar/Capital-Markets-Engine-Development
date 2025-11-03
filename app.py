@@ -47,57 +47,59 @@ def format_manual_citation(meta: Dict[str, Any]) -> str:
     return "see Course Booklet"
 
 # --- Word-based parser: extracts numbered paragraphs and case sections ---
-PARA_RE = re.compile(r"^(\d{1,4})\b(?!\.)")                   # '12' NOT followed by '.' (avoids 1.1, 2.3.4)
-CASE_RE = re.compile(r"^Case\s*Study\s*(\d{1,4})\b", re.I)    # 'Case Study 24'
+PARA_RE = re.compile(r"^(\d{1,4})\b(?!\.)")              # '12' NOT followed by '.' (avoids 1.1)
+CASE_RE = re.compile(r"^Case\s*Study\s*(\d{1,4})\b", re.I)  # 'Case Study 24'
+
+from typing import Union, IO, Any, List, Dict, Tuple
+from docx import Document
 
 def parse_booklet_docx(docx_source: Union[str, IO[bytes]]) -> Tuple[List[str], List[Dict[str, Any]]]:
     """
     Parse the Course Booklet .docx into retrieval-ready (chunks, metas).
 
-    Input:
-      docx_source: file path string OR a file-like object (Streamlit uploader works).
-
-    Output:
-      chunks: list[str]  (text blocks corresponding to numbered paragraphs or case sections)
+    Returns:
+      chunks: list[str]                   # text blocks (numbered paragraphs or case sections)
       metas:  list[dict] with fields:
-        - 'paras': [N] or []
-        - 'cases': [K] or []
-        - 'case_section': Optional[int]
-        - 'title': "see Course Booklet para. N" | "see Course Booklet Case Study K" | "see Course Booklet"
-        - 'url':   "manual+docx://para/N" | "manual+docx://case/K" | "manual+docx://booklet"
+              - 'paras': [N] or []
+              - 'cases': [K] or []
+              - 'case_section': Optional[int]
+              - 'title': "see Course Booklet para. N" | "see Course Booklet Case Study K" | "see Course Booklet"
+              - 'url':   "manual+docx://para/N"     | "manual+docx://case/K"             | "manual+docx://booklet"
+              - 'page_num': int  (running index so downstream code can group/sort)
     """
     doc = Document(docx_source)
 
     def _flush(current: Dict[str, Any], buf: List[str],
-           out_chunks: List[str], out_metas: List[Dict[str, Any]]) -> None:
-    if not current or not buf:
-        return
-    text = re.sub(r"\s+", " ", " ".join(buf)).strip()
-    if not text:
-        return
-    meta = {
-        "paras": current.get("paras", []),
-        "cases": current.get("cases", []),
-        "case_section": current.get("case_section"),
-    }
-    # 👇 add this line so downstream code can group/sort
-    meta["page_num"] = len(out_metas) + 1
+               out_chunks: List[str], out_metas: List[Dict[str, Any]]) -> None:
+        if not current or not buf:
+            return
+        text = re.sub(r"\s+", " ", " ".join(buf)).strip()
+        if not text:
+            return
 
-    if meta["cases"]:
-        k = meta["cases"][0]
-        meta["title"] = f"see Course Booklet Case Study {k}"
-        meta["url"]   = f"manual+docx://case/{k}"
-    elif meta["paras"]:
-        n = meta["paras"][0]
-        meta["title"] = f"see Course Booklet para. {n}"
-        meta["url"]   = f"manual+docx://para/{n}"
-    else:
-        meta["title"] = "see Course Booklet"
-        meta["url"]   = "manual+docx://booklet"
+        meta = {
+            "paras": current.get("paras", []),
+            "cases": current.get("cases", []),
+            "case_section": current.get("case_section"),
+        }
+        # add a simple running index so we can derive a grouping key later
+        meta["page_num"] = len(out_metas) + 1
 
-    out_chunks.append(text)
-    out_metas.append(meta)
-    
+        if meta["cases"]:
+            k = meta["cases"][0]
+            meta["title"] = f"see Course Booklet Case Study {k}"
+            meta["url"]   = f"manual+docx://case/{k}"
+        elif meta["paras"]:
+            n = meta["paras"][0]
+            meta["title"] = f"see Course Booklet para. {n}"
+            meta["url"]   = f"manual+docx://para/{n}"
+        else:
+            meta["title"] = "see Course Booklet"
+            meta["url"]   = "manual+docx://booklet"
+
+        out_chunks.append(text)
+        out_metas.append(meta)
+
     chunks: List[str] = []
     metas:  List[Dict[str, Any]] = []
 
@@ -129,10 +131,10 @@ def parse_booklet_docx(docx_source: Union[str, IO[bytes]]) -> Tuple[List[str], L
             current = {"paras": [n], "cases": [], "case_section": current_case}
             continue
 
-        # 3) Continuation of whatever we’re inside (case or para)
+        # 3) Continuation of current section/paragraph
         if current:
             buf.append(t)
-        # else: ignore preamble lines before first anchor on a page/section
+        # else: ignore preamble lines before the first anchor
 
     _flush(current, buf, chunks, metas)
     return chunks, metas
@@ -145,10 +147,6 @@ def extract_manual_chunks_with_refs(docx_source: Union[str, IO[bytes]],
     Backward-compatible signature. Ignores chunk_words_hint (we already have clean anchors).
     """
     return parse_booklet_docx(docx_source)
-st.caption(f"Loaded {len(manual_chunks)} booklet chunks from BOOKLET.")
-if manual_metas[:3]:
-    st.write("First anchors:",
-             [m.get('paras') or m.get('cases') for m in manual_metas[:5]])
 ## ---------------------------------------------------------------------------------------------
 
 # ---------- Public helpers you will call from the app ----------

@@ -23,6 +23,127 @@ from bs4 import BeautifulSoup
 # ---------------- Build fingerprint (to verify latest deployment) ----------------
 APP_HASH = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:10]
 
+# --------------------------- WORD-ONLY PARSER + CITATIONS ---------------------------
+import re
+from typing import List, Dict, Any, Tuple, Union, IO
+from docx import Document
+
+# --- Compact citation formatter (no PDF assumptions) ---
+def format_manual_citation(meta: Dict[str, Any]) -> str:
+    """
+    Produces labels like:
+      - "see Course Booklet para. 27"
+      - "see Course Booklet Case Study 30"
+      - "see Course Booklet" (fallback)
+    """
+    paras = meta.get("paras") or []
+    cases = meta.get("cases") or []
+    case_sec = meta.get("case_section")
+    case_n = cases[0] if cases else (case_sec if isinstance(case_sec, int) else None)
+    if case_n:
+        return f"see Course Booklet Case Study {case_n}"
+    if paras:
+        return f"see Course Booklet para. {paras[0]}"
+    return "see Course Booklet"
+
+# --- Word-based parser: extracts numbered paragraphs and case sections ---
+PARA_RE = re.compile(r"^(\d{1,4})\b(?!\.)")                   # '12' NOT followed by '.' (avoids 1.1, 2.3.4)
+CASE_RE = re.compile(r"^Case\s*Study\s*(\d{1,4})\b", re.I)    # 'Case Study 24'
+
+def parse_booklet_docx(docx_source: Union[str, IO[bytes]]) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """
+    Parse the Course Booklet .docx into retrieval-ready (chunks, metas).
+
+    Input:
+      docx_source: file path string OR a file-like object (Streamlit uploader works).
+
+    Output:
+      chunks: list[str]  (text blocks corresponding to numbered paragraphs or case sections)
+      metas:  list[dict] with fields:
+        - 'paras': [N] or []
+        - 'cases': [K] or []
+        - 'case_section': Optional[int]
+        - 'title': "see Course Booklet para. N" | "see Course Booklet Case Study K" | "see Course Booklet"
+        - 'url':   "manual+docx://para/N" | "manual+docx://case/K" | "manual+docx://booklet"
+    """
+    doc = Document(docx_source)
+
+    def _flush(current: Dict[str, Any], buf: List[str],
+               out_chunks: List[str], out_metas: List[Dict[str, Any]]) -> None:
+        if not current or not buf:
+            return
+        text = re.sub(r"\s+", " ", " ".join(buf)).strip()
+        if not text:
+            return
+        meta = {
+            "paras": current.get("paras", []),
+            "cases": current.get("cases", []),
+            "case_section": current.get("case_section"),
+        }
+        if meta["cases"]:
+            k = meta["cases"][0]
+            meta["title"] = f"see Course Booklet Case Study {k}"
+            meta["url"]   = f"manual+docx://case/{k}"
+        elif meta["paras"]:
+            n = meta["paras"][0]
+            meta["title"] = f"see Course Booklet para. {n}"
+            meta["url"]   = f"manual+docx://para/{n}"
+        else:
+            meta["title"] = "see Course Booklet"
+            meta["url"]   = "manual+docx://booklet"
+
+        out_chunks.append(text)
+        out_metas.append(meta)
+
+    chunks: List[str] = []
+    metas:  List[Dict[str, Any]] = []
+
+    current: Dict[str, Any] = {}
+    buf: List[str] = []
+    current_case: int | None = None
+
+    for p in doc.paragraphs:
+        t = (p.text or "").strip()
+        if not t:
+            continue
+
+        # 1) Case Study header (starts a new section)
+        m_case = CASE_RE.match(t)
+        if m_case:
+            _flush(current, buf, chunks, metas)
+            buf = [t]
+            k = int(m_case.group(1))
+            current = {"cases": [k], "paras": [], "case_section": k}
+            current_case = k
+            continue
+
+        # 2) Numbered paragraph (stand-alone integer)
+        m_para = PARA_RE.match(t)
+        if m_para:
+            _flush(current, buf, chunks, metas)
+            buf = [t]
+            n = int(m_para.group(1))
+            current = {"paras": [n], "cases": [], "case_section": current_case}
+            continue
+
+        # 3) Continuation of whatever we’re inside (case or para)
+        if current:
+            buf.append(t)
+        # else: ignore preamble lines before first anchor on a page/section
+
+    _flush(current, buf, chunks, metas)
+    return chunks, metas
+
+# --- Compatibility shim for existing code that expects extract_manual_chunks_with_refs(...) ---
+def extract_manual_chunks_with_refs(docx_source: Union[str, IO[bytes]],
+                                    chunk_words_hint: int | None = None
+                                   ) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """
+    Backward-compatible signature. Ignores chunk_words_hint (we already have clean anchors).
+    """
+    return parse_booklet_docx(docx_source)
+# ---------------------------------------------------------------------------------------------
+
 # ---------- Public helpers you will call from the app ----------
 def bold_section_headings(reply: str) -> str:
     """
@@ -1101,9 +1222,9 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
     manual_chunks, manual_metas = [], []
     try:
         manual_chunks, manual_metas = extract_manual_chunks_with_refs(
-            "assets/EUCapML - Course Booklet.pdf",
-            chunk_words_hint=chunk_words
-        )
+            "assets/EUCapML - Course Booklet.docx",   # or a Streamlit uploaded file
+            chunk_words_hint=None
+        )        
     except Exception as e:
         st.warning(f"Could not load course manual: {e}")
     try:
@@ -1937,37 +2058,6 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170):
 
     doc.close()
     return manual_chunks, manual_metas
-
-def format_manual_citation(meta: dict) -> str:
-    """
-    Compact citations for the Course Booklet:
-      - "see Course Booklet para. N" when a numbered paragraph is known and no case applies
-      - "see Course Booklet Case Study K" when a case section is known
-      - Page label (PDF n) is kept only as a fallback when neither para nor case is available
-    """
-    paras = meta.get("paras") or []
-    cases = meta.get("cases") or []
-    case_sec = meta.get("case_section")  # enclosing case, may be int or None
-    page_label = meta.get("page_label") or ""
-    pdf_p = meta.get("page_num")
-
-    # Prefer explicit case on the chunk; else fall back to enclosing section
-    case_n = cases[0] if cases else (case_sec if isinstance(case_sec, int) else None)
-
-    if case_n:
-        return f"see Course Booklet Case Study {case_n}"
-
-    if paras:
-        return f"see Course Booklet para. {paras[0]}"
-
-    # Fallback if we have no anchors (rare)
-    if page_label and pdf_p:
-        return f"see Course Booklet (page {page_label}, PDF {pdf_p})"
-    if page_label:
-        return f"see Course Booklet (page {page_label})"
-    if pdf_p:
-        return f"see Course Booklet (PDF {pdf_p})"
-    return "see Course Booklet"
 
 # ---- Simple page cleaner for booklet parsing ----
 def clean_page_text(t: str) -> str:

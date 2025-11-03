@@ -403,6 +403,90 @@ def bold_section_headings(reply: str) -> str:
     reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
     return reply
 
+# --- Grounding guard helpers (add once) ---
+import re
+from typing import List, Dict, Any  # add if not already present
+
+def _extract_markers(s: str) -> set[str]:
+    """
+    Pull light-weight legal markers from text: law acronyms, Art/§ refs, and named cases.
+    Lowercased for set comparison. This is domain-agnostic enough to scale.
+    """
+    s = s or ""
+    markers = set()
+    patterns = [
+        r"\bMAR\b", r"\bPR\b", r"\bMiFID\s*II\b", r"\bMiFIR\b", r"\bTD\b", r"\bWpHG\b", r"\bWpÜG\b",
+        r"\bTakeover\b", r"\bProspectus\b", r"\bMarket Abuse\b",
+        r"\bArt(?:\.|icle)?\s*\d+(?:\([^)]+\))*",   # Art 7(2), Article 17(4)(a)
+        r"§\s*\d+[a-z]?(?:\([^)]+\))*",             # § 33, § 34(2)
+        r"\bLafonta\b", r"\bGeltl\b", r"\bCURIA\b", r"\bESMA\b",
+    ]
+    for pat in patterns:
+        for m in re.findall(pat, s, flags=re.I):
+            markers.add(m.lower().strip())
+    # normalize lightly
+    out = set()
+    for m in markers:
+        m = m.replace("article", "art").replace("–", "-").strip()
+        out.add(re.sub(r"\s+", " ", m))
+    return out
+
+def _sentence_spans(text: str) -> list[tuple[int, int]]:
+    """Return (start, end) character spans for sentences in `text`."""
+    spans, start = [], 0
+    for m in re.finditer(r"[\.!?…]+", text or ""):
+        end = m.end()
+        spans.append((start, end))
+        start = end
+    if text and start < len(text):
+        spans.append((start, len(text)))
+    return spans
+
+def enforce_citation_grounding(reply: str, top_pages: List[Dict[str, Any]]) -> str:
+    """
+    Keep a [n] only if the sentence containing it shares at least one marker
+    with the n-th source's snippets. If no overlap -> drop that [n].
+    `top_pages` is your SOURCES list; each item should have key "snippets".
+    """
+    if not reply or not top_pages:
+        return reply
+
+    # Precompute source markers per [n]
+    src_markers: dict[int, set[str]] = {}
+    for i, tp in enumerate(top_pages, start=1):
+        mset: set[str] = set()
+        for sn in (tp.get("snippets") or []):
+            mset |= _extract_markers(sn)
+        src_markers[i] = mset
+
+    text = reply
+    spans = _sentence_spans(text)
+
+    # Map char index -> sentence index
+    sent_index_of = {}
+    for si, (s, e) in enumerate(spans):
+        for j in range(s, e):
+            sent_index_of[j] = si
+    # Iterate all [n] usages
+    for m in re.finditer(r"\[(\d+)\]", text):
+        n = int(m.group(1))
+        si = sent_index_of.get(m.start())
+        if si is None or n not in src_markers:
+            # Remove citations we cannot validate at all
+            text = re.sub(rf"\[(?:{n})\]", "", text)
+            continue
+
+        s_span = spans[si]
+        sentence = text[s_span[0]:s_span[1]]
+        sent_markers = _extract_markers(sentence)
+
+        # Require at least one overlapping marker (regime, Art/§, or case)
+        if not (sent_markers & src_markers[n]):
+            text = re.sub(rf"\[(?:{n})\]", "", text)
+
+    # Clean stray double spaces introduced by removals
+    return re.sub(r"\s{2,}", " ", text).strip()
+
 def _anchors_from_model(model_answer_slice: str, cap: int = 20) -> list[str]:
     s = model_answer_slice or ""
     acr = re.findall(r"\b[A-ZÄÖÜ]{2,6}\b", s)                        # MAR, PR, TD, WpHG, ...
@@ -2234,6 +2318,7 @@ with colA:
                 reply = enforce_feedback_template(reply)
                 reply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)
                 reply = bold_section_headings(reply)
+                reply = enforce_citation_grounding(reply, top_pages)
                 reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
             
                 used_idxs = parse_cited_indices(reply)

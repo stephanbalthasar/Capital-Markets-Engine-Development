@@ -1525,13 +1525,6 @@ def llm_chunk_relevant(chunk_text: str, model_answer_slice: str, api_key: str) -
     reply = call_groq(messages, api_key=api_key, model_name="llama-3.1-8b-instant", temperature=0.0, max_tokens=20)
     return reply.strip().lower().startswith("yes")
 
-filtered_chunks = []
-filtered_metas = []
-for ch, meta in zip(manual_chunks, manual_metas):
-    if llm_chunk_relevant(ch, model_answer_filtered, api_key):
-        filtered_chunks.append(ch)
-        filtered_metas.append(meta)
-
 def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend,
                                   extracted_keywords, user_query: str = "",
                                   top_k_pages=8, chunk_words=170):
@@ -1564,13 +1557,13 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
     # ✅ Filter manual chunks using keywords + the user's query AND case numbers, if any
     selected_q = st.session_state.get("selected_question", "Question 1")
     uq_cases = detect_case_numbers(user_query or "")
-    filtered_chunks, filtered_metas = [], []
-    for ch, m in zip(manual_chunks, manual_metas):
-        has_kw = manual_chunk_relevant(ch, extracted_keywords, user_query)
-        case_match = bool(uq_cases and set(uq_cases).intersection(set(m.get("cases") or [])))
-        if has_kw or case_match:
+    
+    filtered_chunks = []
+    filtered_metas = []
+    for ch, meta in zip(manual_chunks, manual_metas):
+        if llm_chunk_relevant(ch, model_answer_filtered, api_key):
             filtered_chunks.append(ch)
-            filtered_metas.append(m)
+            filtered_metas.append(meta)
     if filtered_chunks:
         manual_chunks, manual_metas = filtered_chunks, filtered_metas
     

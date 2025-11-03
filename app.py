@@ -372,7 +372,7 @@ def load_booklet_anchors(docx_source: Union[str, IO[bytes]]) -> Tuple[List[Dict[
 ## ---------------------------------------------------------------------------------------------
 
 # ---------- Public helpers you will call from the app ----------
-def throttle_groq(delay_seconds: float = 4):
+def throttle_groq(delay_seconds: float = 6):
     """Sleep for a fixed delay to throttle Groq API calls."""
     time.sleep(delay_seconds)
 

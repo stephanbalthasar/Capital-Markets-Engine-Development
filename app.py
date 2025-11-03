@@ -2315,22 +2315,14 @@ with colA:
                 reply = prune_redundant_improvements(student_answer, reply)
                 reply = lock_out_false_mistakes(reply, rubric)
                 reply = lock_out_false_missing(reply, rubric)
-                reply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)
                 reply = enforce_feedback_template(reply)
+                reply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)
                 reply = bold_section_headings(reply)
                 reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
             
                 used_idxs = parse_cited_indices(reply)
-                present_keywords, _ = _flatten_hits_misses_from_rubric(rubric)
-                present_keywords_set = {kw.lower() for kw in present_keywords}
-
-                def source_is_relevant(line: str) -> bool:
-                    return any(kw in line.lower() for kw in present_keywords_set)
-
-                display_source_lines = [line for line in source_lines if source_is_relevant(line)]
-                if not display_source_lines:
-                    display_source_lines = ["— no sources cited —"]
-                                                
+                display_source_lines = filter_sources_by_indices(source_lines, used_idxs) or source_lines
+            
                 if reply:
                     st.markdown(reply)
                 else:

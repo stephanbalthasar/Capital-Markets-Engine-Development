@@ -1565,20 +1565,23 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
         if mc2:  # shrink only if something kept
             manual_chunks, manual_metas = mc2, mm2
 
-    # (keep the rest unchanged)
+    # ⚡ FAST booklet filtering: keep only the top‑N manual chunks by cosine similarity
+    # to the MODEL ANSWER slice. This avoids calling the LLM per chunk.
+    TOP_N_MANUAL = 12  # tune 8–20 if you want more/less booklet context
 
-    # ✅ Filter manual chunks using keywords + the user's query AND case numbers, if any
-    selected_q = st.session_state.get("selected_question", "Question 1")
-    uq_cases = detect_case_numbers(user_query or "")
-    
-    filtered_chunks = []
-    filtered_metas = []
-    for ch, meta in zip(manual_chunks, manual_metas):
-        if llm_chunk_relevant(ch, model_answer_filtered, api_key):
-            filtered_chunks.append(ch)
-            filtered_metas.append(meta)
-    if filtered_chunks:
-        manual_chunks, manual_metas = filtered_chunks, filtered_metas
+    if manual_chunks:
+        try:
+            # Reuse your local embedder (SBERT or TF‑IDF fallback)
+            embs = embed_texts([model_answer_filtered] + manual_chunks, backend)
+            qv, cvs = embs[0], embs[1:]
+            sims = [cos_sim(qv, v) for v in cvs]
+
+            keep_idx = sorted(range(len(sims)), key=lambda i: sims[i], reverse=True)[:TOP_N_MANUAL]
+            manual_chunks = [manual_chunks[i] for i in keep_idx]
+            manual_metas  = [manual_metas[i]  for i in keep_idx]
+        except Exception as e:
+            # Fail safe: if embeddings fail for any reason, keep the original chunks.
+            st.info(f"Booklet fast-filter fallback (kept all): {e}")
     
     # ---- Prepare manual meta tuples with a unique key per *page* so we can group snippets by page
     manual_meta = []

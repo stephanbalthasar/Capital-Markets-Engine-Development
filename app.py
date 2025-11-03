@@ -1608,7 +1608,7 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
     idx = np.argsort(sims)[::-1]
 
     # ✅ Similarity floor to keep only reasonably relevant snippets
-    MIN_SIM = 0.3  # tune if needed
+    MIN_SIM = 0.22  # tune if needed
 
     # ---- Select top snippets grouped by (manual page) or (web page index)
     per_page = {}

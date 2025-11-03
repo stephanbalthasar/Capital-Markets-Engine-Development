@@ -1609,11 +1609,12 @@ HEADING_NUM_RE  = re.compile(r"^\d+(?:\.\d+)+")            # reject "1.1", "3.2.
 CASE_LINE_RE_V2 = re.compile(r"^\s*Case\s*Study\s*(\d{1,4})\b", re.I)
 
 # -- Tunable thresholds (adjust only if needed)
-TOP_BAND_FRAC   = 0.06   # top header band
-FOOT_BAND_FRAC  = 0.18   # bottom footnote band (increase if footnotes are taller)
-GUTTER_EXTRA_PT = 55.0   # gutter width to the right of the extreme-left text (pts)
-SIZE_NEAR_BODY  = (0.80, 1.45)  # accept numbers 80%..145% of body size
-RELAX_SIZE_MIN  = 0.95   # relaxed min if no bold numbers found
+TOP_BAND_FRAC   = 0.06     # header band (unchanged)
+FOOT_BAND_FRAC  = 0.24     # ↑ was 0.18: push the footnote cutoff higher
+GUTTER_EXTRA_PT = 70.0     # ↑ was 55: accept numbers a bit farther from the extreme left
+SIZE_NEAR_BODY  = (0.80, 1.45)
+RELAX_SIZE_MIN  = 0.85     # ↓ was 0.95: catch page-3 anchors that aren't flagged bold
+NEIGHBOR_Y_TOL  = 6.0      # vertical tolerance (points) to find a same-line body chunk
 
 def _is_bold_span(span: dict) -> bool:
     fname = (span.get("font") or "").lower()
@@ -1679,6 +1680,43 @@ def _extract_case_headers(lines, top_y, bot_y):
         if m:
             out.append({"case": int(m.group(1)), "y0": ln["y0"], "yc": ln["yc"]})
     return out
+# ---------- ADD BACK the two simple helpers used by case-slicing ----------
+
+from typing import Optional
+
+def _page_lines_with_spans(page) -> list[dict]:
+    """
+    Return ordered line dicts with geometry + spans:
+      [{'x0','y0','x1','y1','text','spans':[...]} , ...]
+    """
+    d = page.get_text("dict")
+    out = []
+    for blk in d.get("blocks", []):
+        if blk.get("type", 0) != 0:
+            continue
+        for ln in blk.get("lines", []):
+            spans = ln.get("spans", [])
+            txt = "".join(s.get("text", "") for s in spans)
+            if not txt.strip():
+                continue
+            x0, y0, x1, y1 = ln.get("bbox", [0, 0, 0, 0])
+            out.append({"x0": float(x0), "y0": float(y0), "x1": float(x1), "y1": float(y1),
+                        "text": txt, "spans": spans})
+    out.sort(key=lambda L: (L["y0"], L["x0"]))
+    return out
+
+
+def _body_left_threshold(lines: list[dict]) -> float:
+    """
+    Robust left edge of the main body column. Use ~40th percentile x0 to ignore the few
+    super-left gutter lines.
+    """
+    xs = [L["x0"] for L in lines]
+    if not xs:
+        return 60.0
+    xs_sorted = sorted(xs)
+    idx = max(0, min(len(xs_sorted) - 1, int(0.40 * len(xs_sorted))))
+    return xs_sorted[idx]
 
 def _extract_page_paragraphs(page):
     """
@@ -1697,48 +1735,56 @@ def _extract_page_paragraphs(page):
     top_band_y = TOP_BAND_FRAC * page_h
     bot_band_y = page_h * (1.0 - FOOT_BAND_FRAC)
 
-    # case headers
+    # Case headers (unchanged)
     lines = _group_lines(spans)
     case_headers = _extract_case_headers(lines, top_band_y, bot_band_y)
 
-    # candidates in gutter = stand-alone integer, in gutter, not in header/foot bands
-    anchors_strict = []
-    anchors_relax  = []
+    # ---- candidate numeric anchors in the left gutter ----
+    anchors_candidates = []
     for s in spans:
         t = s["text"]
-        if HEADING_NUM_RE.match(t):                # reject "1.1", "1.2.3"
+        if HEADING_NUM_RE.match(t):            # reject "1.1" etc.
             continue
-        if not INT_ONLY_RE.match(t):               # must be pure integer
+        if not INT_ONLY_RE.match(t):           # must be pure integer
             continue
-        if s["x0"] > gutter_x:                     # must be in the left gutter
+        if s["x0"] > gutter_x:                 # must be in the left gutter
             continue
         if not (top_band_y <= s["y0"] <= bot_band_y):
             continue
         ratio = (s["size"] / body_size) if body_size else 1.0
-        # strict: bold OR clearly near body size
-        if _is_bold_span(s) or (SIZE_NEAR_BODY[0] <= ratio <= SIZE_NEAR_BODY[1]):
-            anchors_strict.append({"para": int(t), "y0": s["y0"], "yc": s["yc"]})
-        # relaxed: allow slightly smaller/larger when PDF drops style info
-        if RELAX_SIZE_MIN <= ratio <= (SIZE_NEAR_BODY[1] * 1.10):
-            anchors_relax.append({"para": int(t), "y0": s["y0"], "yc": s["yc"]})
+        if _is_bold_span(s) or (SIZE_NEAR_BODY[0] <= ratio <= SIZE_NEAR_BODY[1]) or (ratio >= RELAX_SIZE_MIN):
+            anchors_candidates.append(s)
 
-    anchors = anchors_strict or anchors_relax
+    if not anchors_candidates:
+        return [], case_headers
+
+    # ---- require a NEAR-BY BODY SPAN to the right on the same/near line ----
+    body_spans_all = [s for s in spans
+                      if (top_band_y <= s["y0"] <= bot_band_y)
+                      and s["x0"] > gutter_x
+                      and s["size"] >= 0.9 * body_size]
+
+    def has_body_neighbor(a):
+        # body span within ±NEIGHBOR_Y_TOL pts vertically, to the right, with near-body size
+        ay = a["yc"]
+        for s in body_spans_all:
+            if abs(s["yc"] - ay) <= NEIGHBOR_Y_TOL and s["x0"] > gutter_x and s["size"] >= 0.9 * body_size:
+                return True
+        return False
+
+    anchors = [{"para": int(s["text"]), "y0": s["y0"], "yc": s["yc"]}
+               for s in anchors_candidates if has_body_neighbor(s)]
     anchors.sort(key=lambda a: a["yc"])
     if not anchors:
+        # Nothing passed neighbor check → safer to return empty than hallucinate from footers
         return [], case_headers
-    # body spans to collect text: right of gutter, within bands, exclude tiny footnotes
-    body_spans = [
-        s for s in spans
-        if (top_band_y <= s["y0"] <= bot_band_y)
-        and s["x0"] > gutter_x
-        and s["size"] >= 0.9 * body_size
-    ]
 
+    # ---- collect paragraph text between anchors (body column only, same bands) ----
     para_items = []
     for i, a in enumerate(anchors):
         y_top = (anchors[i - 1]["yc"] + a["yc"]) / 2.0 if i > 0 else a["y0"] - 3.0
         y_bot = (a["yc"] + anchors[i + 1]["yc"]) / 2.0 if i + 1 < len(anchors) else bot_band_y
-        chunks = [s for s in body_spans if y_top <= s["yc"] <= y_bot]
+        chunks = [s for s in body_spans_all if y_top <= s["yc"] <= y_bot]
         chunks.sort(key=lambda s: (round(s["yc"], 1), s["x0"]))
         text = " ".join(s["text"] for s in chunks)
         text = re.sub(r"\s+", " ", text).strip()

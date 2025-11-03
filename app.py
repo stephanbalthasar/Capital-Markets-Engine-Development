@@ -23,185 +23,6 @@ from bs4 import BeautifulSoup
 # ---------------- Build fingerprint (to verify latest deployment) ----------------
 APP_HASH = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:10]
 
-# ---------------- v2: geometry-first left-gutter paragraph parser ----------------
-# Place this near the top, after your imports.
-
-import re
-import statistics
-
-# Stand-alone integer for paragraph number (1..9999)
-INT_ONLY_RE     = re.compile(r"^\d{1,4}$")
-# Headings like "1.1", "3.2.1" should NOT be treated as numbered paragraphs
-HEADING_NUM_RE  = re.compile(r"^\d+(?:\.\d+)+")
-
-# Case Study headers (body line starts with "Case Study N")
-CASE_LINE_RE_V2 = re.compile(r"^\s*Case\s*Study\s*(\d{1,4})\b", re.I)
-
-
-def _is_bold_span(span: dict) -> bool:
-    """Heuristic: treat fonts containing 'Bold' as bold."""
-    fname = (span.get("font") or "").lower()
-    return "bold" in fname
-
-
-def _modal_body_size(spans):
-    """Estimate dominant body font size via mode/median of span sizes."""
-    sizes = [round(float(s.get("size", 0.0)), 1) for s in spans if float(s.get("size", 0.0)) > 0.0]
-    if not sizes:
-        return 10.0
-    try:
-        return float(statistics.mode(sizes))
-    except statistics.StatisticsError:
-        return float(statistics.median(sizes))
-
-
-def _collect_spans(page):
-    """Collect all span boxes with text and geometry from a PDF page."""
-    pd = page.get_text("dict")
-    spans = []
-    for b in pd.get("blocks", []):
-        for l in b.get("lines", []):
-            for s in l.get("spans", []):
-                txt = re.sub(r"\s+", " ", (s.get("text") or "")).strip()
-                if not txt:
-                    continue
-                x0, y0, x1, y1 = s.get("bbox", [0, 0, 0, 0])
-                spans.append({
-                    "text": txt,
-                    "x0": float(x0), "y0": float(y0),
-                    "x1": float(x1), "y1": float(y1),
-                    "yc": float(y0 + y1) / 2.0,
-                    "font": s.get("font"),
-                    "size": float(s.get("size", 0.0)),
-                    "flags": s.get("flags", 0),
-                })
-    return spans
-
-
-def _detect_gutter_bound(spans):
-    """
-    Compute a dynamic left-gutter boundary: the numeric badge must sit left of body text.
-    We take the ~5th percentile x0 as a left edge and add ~45pt as the allowed gutter width.
-    """
-    xs = sorted(s["x0"] for s in spans)
-    if not xs:
-        return 60.0
-    left_edge = xs[max(0, int(0.05 * len(xs)) - 1)]
-    return left_edge + 45.0  # tweakable: if anchors are missed, try 55–65
-
-
-def _extract_case_headers(lines):
-    """Find 'Case Study N' headers on body lines (not in the gutter)."""
-    out = []
-    for ln in lines:
-        text = ln["text"]
-        m = CASE_LINE_RE_V2.match(text)
-        if m:
-            out.append({"case": int(m.group(1)), "y0": ln["y0"], "yc": ln["yc"]})
-    return out
-
-
-def _extract_page_paragraphs_v2(page):
-    """
-    Return: (para_items, case_headers)
-      para_items: list of {para, y0, yc, text}
-      case_headers: list of {case, y0, yc}
-    """
-    spans = _collect_spans(page)
-    if not spans:
-        return [], []
-
-    body_size = _modal_body_size(spans)
-    gutter_x  = _detect_gutter_bound(spans)
-
-    # Exclude page header band (top) and footnote band (bottom).
-    page_h      = float(page.rect.height)
-    top_band_y  = 0.06 * page_h    # top ~6% = header area
-    foot_band   = 0.14 * page_h    # bottom ~14% = typical footnotes
-    bot_band_y  = page_h * (1.0 - 0.14)
-
-    # Build coarse "lines" by grouping spans with similar yc
-    by_y = {}
-    for s in spans:
-        yk = round(s["yc"], 1)
-        ln = by_y.setdefault(yk, {"y0": s["y0"], "yc": s["yc"], "x0": s["x0"], "text": ""})
-        ln["y0"]  = min(ln["y0"], s["y0"])
-        ln["x0"]  = min(ln["x0"], s["x0"])
-        ln["text"] = (ln["text"] + " " + s["text"]).strip() if ln["text"] else s["text"]
-    lines = sorted(by_y.values(), key=lambda d: d["yc"])
-
-    # Case Study headers in body area (not header/footer)
-    case_headers = [ch for ch in _extract_case_headers(lines)
-                    if top_band_y < ch["y0"] < bot_band_y]
-
-    # --- Detect left-gutter paragraph anchors ---
-    anchors = []
-    for s in spans:
-        t = s["text"]
-        if HEADING_NUM_RE.match(t):        # e.g. "1.1", "3.2.1"
-            continue
-        if not INT_ONLY_RE.match(t):       # must be pure integer
-            continue
-        if not _is_bold_span(s):           # prefer bold-number badges
-            continue
-        if s["x0"] > gutter_x:             # must sit in gutter, not body
-            continue
-        if s["y0"] < top_band_y or s["y0"] > bot_band_y:
-            continue
-        # number font size roughly equals body font size (±35%)
-        if not (0.85 * body_size <= s["size"] <= 1.35 * body_size):
-            continue
-        anchors.append({"para": int(t), "y0": s["y0"], "yc": s["yc"]})
-
-    # If none found, relax bold requirement (some PDFs encode bold oddly)
-    if not anchors:
-        for s in spans:
-            t = s["text"]
-            if HEADING_NUM_RE.match(t) or not INT_ONLY_RE.match(t):
-                continue
-            if s["x0"] > gutter_x or s["y0"] < top_band_y or s["y0"] > bot_band_y:
-                continue
-            if s["size"] >= 1.05 * body_size:  # slightly larger than body
-                anchors.append({"para": int(t), "y0": s["y0"], "yc": s["yc"]})
-
-    anchors.sort(key=lambda a: a["yc"])
-    if not anchors:
-        return [], case_headers
-
-    # --- Collect paragraph text to the right between this and next anchor ---
-    # Keep only body spans (exclude small-footnote text and anything in footer band)
-    body_spans = [s for s in spans
-                  if (top_band_y <= s["y0"] <= bot_band_y)
-                  and s["x0"] > gutter_x
-                  and s["size"] >= 0.9 * body_size]
-
-    para_items = []
-    for i, a in enumerate(anchors):
-        y_top = (anchors[i - 1]["yc"] + a["yc"]) / 2.0 if i > 0 else a["y0"] - 4.0
-        y_bot = (a["yc"] + anchors[i + 1]["yc"]) / 2.0 if i + 1 < len(anchors) else bot_band_y
-
-        chunks = [s for s in body_spans if y_top <= s["yc"] <= y_bot]
-        chunks.sort(key=lambda s: (round(s["yc"], 1), s["x0"]))  # reading order
-        text = " ".join(s["text"] for s in chunks)
-        text = re.sub(r"\s+", " ", text).strip()
-        if text:
-            para_items.append({"para": a["para"], "y0": a["y0"], "yc": a["yc"], "text": text})
-
-    return para_items, case_headers
-
-
-# ---- Wrapper: replace your original _extract_page_paragraphs with this ----
-USE_V2_GUTTER_PARSER = True
-
-def _extract_page_paragraphs(page):
-    if USE_V2_GUTTER_PARSER:
-        return _extract_page_paragraphs_v2(page)
-    # Else: (legacy path) put your old implementation here, if you want a runtime switch
-    # return _extract_page_paragraphs_legacy(page)
-    return [], []
-# ------------------------------------------------------------------------------
-
-
 # ---------- Public helpers you will call from the app ----------
 def bold_section_headings(reply: str) -> str:
     """
@@ -1779,145 +1600,154 @@ def _dehyphenate_join(prev: str, curr: str) -> str:
         return prev + " " + curr
     return prev or curr
 
-# ============ Deterministic booklet parsing helpers ============
-# Accepts: "12", "12.", "12)", "12 –", "12 —" etc. at the **very start** of a line.
-LEAD_NUM_RE   = re.compile(r"^\s*(\d{1,4})(?:[.)]|\s*[-–—])?\s+")
-CASE_LINE_RE = re.compile(
-    r"""^\s*
-        (?:[-•–]\s*)?               # optional bullet
-        (?:\[\**\s*)?               # optional '[' / '**' (Case Notes formatting)
-        Case\s*Study\s*(\d{1,4})\b
-    """,
-    re.I | re.VERBOSE,
-)
+# ---------------- v2.1: Geometry-first left-gutter paragraph parser (clean) ----------------
+# This replaces ANY legacy line-based parser. Keep exactly one _extract_page_paragraphs in the file.
 
-from typing import Optional
+import re, statistics
+INT_ONLY_RE     = re.compile(r"^\d{1,4}$")
+HEADING_NUM_RE  = re.compile(r"^\d+(?:\.\d+)+")            # reject "1.1", "3.2.1", etc.
+CASE_LINE_RE_V2 = re.compile(r"^\s*Case\s*Study\s*(\d{1,4})\b", re.I)
 
-def _page_lines_with_spans(page) -> list[dict]:
-    """
-    Return ordered line dicts with geometry + spans:
-      [{'x0','y0','x1','y1','text','spans':[{'text','size','font','bbox'...}, ...]}, ...]
-    """
-    d = page.get_text("dict")
+# -- Tunable thresholds (adjust only if needed)
+TOP_BAND_FRAC   = 0.06   # top header band
+FOOT_BAND_FRAC  = 0.18   # bottom footnote band (increase if footnotes are taller)
+GUTTER_EXTRA_PT = 55.0   # gutter width to the right of the extreme-left text (pts)
+SIZE_NEAR_BODY  = (0.80, 1.45)  # accept numbers 80%..145% of body size
+RELAX_SIZE_MIN  = 0.95   # relaxed min if no bold numbers found
+
+def _is_bold_span(span: dict) -> bool:
+    fname = (span.get("font") or "").lower()
+    return "bold" in fname
+
+def _modal_body_size(spans):
+    sizes = [round(float(s.get("size", 0.0)), 1) for s in spans if float(s.get("size", 0.0)) > 0.0]
+    if not sizes:
+        return 10.0
+    try:
+        return float(statistics.mode(sizes))
+    except statistics.StatisticsError:
+        return float(statistics.median(sizes))
+
+def _collect_spans(page):
+    pd = page.get_text("dict")
     out = []
-    for blk in d.get("blocks", []):
-        if blk.get("type") != 0:
+    for b in pd.get("blocks", []):
+        # only text blocks (type 0)
+        if b.get("type", 0) != 0:
             continue
-        for ln in blk.get("lines", []):
-            spans = ln.get("spans", [])
-            txt = "".join(s.get("text", "") for s in spans)
-            if not txt.strip():
-                continue
-            x0, y0, x1, y1 = ln.get("bbox", [0, 0, 0, 0])
-            out.append({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "text": txt, "spans": spans})
-    out.sort(key=lambda L: (L["y0"], L["x0"]))
+        for l in b.get("lines", []):
+            for s in l.get("spans", []):
+                txt = re.sub(r"\s+", " ", (s.get("text") or "")).strip()
+                if not txt:
+                    continue
+                x0, y0, x1, y1 = s.get("bbox", [0, 0, 0, 0])
+                out.append({
+                    "text": txt,
+                    "x0": float(x0), "y0": float(y0),
+                    "x1": float(x1), "y1": float(y1),
+                    "yc": float(y0 + y1) / 2.0,
+                    "font": s.get("font"),
+                    "size": float(s.get("size", 0.0)),
+                })
     return out
 
-def _median(xs, default=12.0):
-    xs = [x for x in xs if isinstance(x, (int, float))]
-    return stats.median(xs) if xs else default
-
-def _body_left_threshold(lines: list[dict]) -> float:
-    """
-    Left edge of main body column = median x0 of lines (robust even if margin numbers exist).
-    """
-    xs = [L["x0"] for L in lines]
+def _detect_gutter_bound(spans):
+    # left edge ~ 5th percentile x0, plus an allowance for the number badge width
+    xs = sorted(s["x0"] for s in spans)
     if not xs:
         return 60.0
-    # Use 40th percentile as a robust body-left estimate (ignores a few very-left gutter lines)
-    xs_sorted = sorted(xs)
-    idx = max(0, min(len(xs_sorted)-1, int(0.40 * len(xs_sorted))))
-    return xs_sorted[idx]
+    left_edge = xs[max(0, int(0.05 * len(xs)) - 1)]
+    return left_edge + GUTTER_EXTRA_PT
 
-def _dehyphen_join(prev: str, curr: str) -> str:
-    if not prev:
-        return curr
-    if prev.endswith("-") and curr and curr[:1].islower():
-        return prev[:-1] + curr
-    # normal join with single space
-    return (prev + " " + curr).strip()
+def _group_lines(spans):
+    """Coarse line groups for case header detection."""
+    by_y = {}
+    for s in spans:
+        yk = round(s["yc"], 1)
+        g  = by_y.setdefault(yk, {"y0": s["y0"], "yc": s["yc"], "x0": s["x0"], "text": ""})
+        g["y0"]  = min(g["y0"], s["y0"])
+        g["x0"]  = min(g["x0"], s["x0"])
+        g["text"] = (g["text"] + " " + s["text"]).strip() if g["text"] else s["text"]
+    return sorted(by_y.values(), key=lambda d: d["yc"])
 
-def _match_leading_number(line_text: str) -> Optional[int]:
-    m = LEAD_NUM_RE.match(line_text)
-    if not m:
-        return None
-    try:
-        n = int(m.group(1))
-        return n
-    except Exception:
-        return None
-
-def _strip_leading_number(line_text: str) -> str:
-    """
-    Remove the leading '12', '12.', '12)', '12 –', etc., and return the remaining text.
-    Ensures we do **not** lose the first line of the paragraph.
-    """
-    return LEAD_NUM_RE.sub("", line_text, count=1).strip()
-
-def _find_case_starts(lines: list[dict], body_left: float) -> list[dict]:
-    """
-    Return [{'case':N,'y0':<line top>}, ...] for lines starting with 'Case Study N ...'
-    that appear **in the body column** (not the left number gutter).
-    """
-    hits = []
-    for L in lines:
-        # keep only lines that begin near/at the body column
-        if L["x0"] < body_left - 3.0:
+def _extract_case_headers(lines, top_y, bot_y):
+    out = []
+    for ln in lines:
+        if not (top_y < ln["y0"] < bot_y):
             continue
-        m = CASE_LINE_RE.match(L["text"])
+        m = CASE_LINE_RE_V2.match(ln["text"])
         if m:
-            hits.append({"case": int(m.group(1)), "y0": L["y0"]})
-    hits.sort(key=lambda d: d["y0"])
-    return hits
+            out.append({"case": int(m.group(1)), "y0": ln["y0"], "yc": ln["yc"]})
+    return out
 
-def _extract_page_paragraphs(page) -> tuple[list[dict], list[dict]]:
+def _extract_page_paragraphs(page):
     """
-    Parse a page into anchored paragraphs and case-start markers.
-
-    Returns:
-      para_items: [{'para':N, 'y0':float, 'text':str}]
-      case_starts: [{'case':K, 'y0':float}]
+    Returns: (para_items, case_headers)
+      para_items  = [{'para': N, 'y0': float, 'yc': float, 'text': str}, ...]
+      case_headers= [{'case': K, 'y0': float, 'yc': float}, ...]
     """
-    lines = _page_lines_with_spans(page)
-    if not lines:
+    spans = _collect_spans(page)
+    if not spans:
         return [], []
 
-    body_left = _body_left_threshold(lines)
+    body_size = _modal_body_size(spans)
+    gutter_x  = _detect_gutter_bound(spans)
 
-    para_items: list[dict] = []
-    case_starts = _find_case_starts(lines, body_left)
+    page_h     = float(page.rect.height)
+    top_band_y = TOP_BAND_FRAC * page_h
+    bot_band_y = page_h * (1.0 - FOOT_BAND_FRAC)
 
-    cur_para_num = None
-    cur_para_y0  = None
-    cur_text     = ""
+    # case headers
+    lines = _group_lines(spans)
+    case_headers = _extract_case_headers(lines, top_band_y, bot_band_y)
 
-    for L in lines:
-        txt = L["text"].strip()
+    # candidates in gutter = stand-alone integer, in gutter, not in header/foot bands
+    anchors_strict = []
+    anchors_relax  = []
+    for s in spans:
+        t = s["text"]
+        if HEADING_NUM_RE.match(t):                # reject "1.1", "1.2.3"
+            continue
+        if not INT_ONLY_RE.match(t):               # must be pure integer
+            continue
+        if s["x0"] > gutter_x:                     # must be in the left gutter
+            continue
+        if not (top_band_y <= s["y0"] <= bot_band_y):
+            continue
+        ratio = (s["size"] / body_size) if body_size else 1.0
+        # strict: bold OR clearly near body size
+        if _is_bold_span(s) or (SIZE_NEAR_BODY[0] <= ratio <= SIZE_NEAR_BODY[1]):
+            anchors_strict.append({"para": int(t), "y0": s["y0"], "yc": s["yc"]})
+        # relaxed: allow slightly smaller/larger when PDF drops style info
+        if RELAX_SIZE_MIN <= ratio <= (SIZE_NEAR_BODY[1] * 1.10):
+            anchors_relax.append({"para": int(t), "y0": s["y0"], "yc": s["yc"]})
 
-        # New paragraph if this line starts with a leading number
-        n = _match_leading_number(txt)
-        if n is not None:
-            # flush previous paragraph
-            if cur_para_num is not None and cur_text.strip():
-                para_items.append({"para": cur_para_num, "y0": cur_para_y0, "text": cur_text.strip()})
-            # start new paragraph; keep the **rest of this line** (first-line text!)
-            cur_para_num = n
-            cur_para_y0  = L["y0"]
-            cur_text     = _strip_leading_number(txt)
-        else:
-            # continuation line for current paragraph
-            if cur_para_num is not None:
-                cur_text = _dehyphen_join(cur_text, txt)
-            else:
-                # lines before the first numbered paragraph on the page: ignore for numbered parsing
-                pass
+    anchors = anchors_strict or anchors_relax
+    anchors.sort(key=lambda a: a["yc"])
+    if not anchors:
+        return [], case_headers
+    # body spans to collect text: right of gutter, within bands, exclude tiny footnotes
+    body_spans = [
+        s for s in spans
+        if (top_band_y <= s["y0"] <= bot_band_y)
+        and s["x0"] > gutter_x
+        and s["size"] >= 0.9 * body_size
+    ]
 
-    # flush trailing paragraph
-    if cur_para_num is not None and cur_text.strip():
-        para_items.append({"para": cur_para_num, "y0": cur_para_y0, "text": cur_text.strip()})
+    para_items = []
+    for i, a in enumerate(anchors):
+        y_top = (anchors[i - 1]["yc"] + a["yc"]) / 2.0 if i > 0 else a["y0"] - 3.0
+        y_bot = (a["yc"] + anchors[i + 1]["yc"]) / 2.0 if i + 1 < len(anchors) else bot_band_y
+        chunks = [s for s in body_spans if y_top <= s["yc"] <= y_bot]
+        chunks.sort(key=lambda s: (round(s["yc"], 1), s["x0"]))
+        text = " ".join(s["text"] for s in chunks)
+        text = re.sub(r"\s+", " ", text).strip()
+        if text:
+            para_items.append({"para": a["para"], "y0": a["y0"], "yc": a["yc"], "text": text})
 
-    return para_items, case_starts
-# ============ /Deterministic booklet parsing helpers ============
+    return para_items, case_headers
+# -------------------------------------------------------------------------------------------
+
 def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) -> tuple[list[str], list[dict]]:
     """
     Deterministic extraction:

@@ -2321,8 +2321,10 @@ with colA:
                 reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
             
                 used_idxs = parse_cited_indices(reply)
-                display_source_lines = filter_sources_by_indices(source_lines, used_idxs) or source_lines
-            
+                display_source_lines = filter_sources_by_indices(source_lines, used_idxs)
+                if not display_source_lines:
+                    display_source_lines = ["— no sources cited —"]
+                                
                 if reply:
                     st.markdown(reply)
                 else:

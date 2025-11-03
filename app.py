@@ -1517,12 +1517,20 @@ def collect_corpus(student_answer: str, extra_user_q: str, max_fetch: int = 20) 
     return fetched
 
 # ---- Manual relevance terms per question ----
-def manual_chunk_relevant(text: str, extracted_keywords: list[str], user_query: str = "") -> bool:
-    q_terms = [w.lower() for w in re.findall(r"[A-Za-zÄÖÜäöüß0-9\-]{3,}", user_query or "")]
-    keys = [k.lower() for k in (extracted_keywords or [])]
-    tgt = text.lower()
-    return any(k in tgt for k in (keys + q_terms))
+def llm_chunk_relevant(chunk_text: str, model_answer_slice: str, api_key: str) -> bool:
+    messages = [
+        {"role": "system", "content": "You are a legal tutor. Decide if the following chunk is relevant to the model answer."},
+        {"role": "user", "content": f"MODEL ANSWER:\n{model_answer_slice}\n\nCHUNK:\n{chunk_text}\n\nIs this chunk relevant? Reply 'Yes' or 'No'."}
+    ]
+    reply = call_groq(messages, api_key=api_key, model_name="llama-3.1-8b-instant", temperature=0.0, max_tokens=20)
+    return reply.strip().lower().startswith("yes")
 
+filtered_chunks = []
+filtered_metas = []
+for ch, meta in zip(manual_chunks, manual_metas):
+    if llm_chunk_relevant(ch, model_answer_filtered, api_key):
+        filtered_chunks.append(ch)
+        filtered_metas.append(meta)
 
 def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend,
                                   extracted_keywords, user_query: str = "",

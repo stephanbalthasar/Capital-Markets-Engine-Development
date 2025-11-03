@@ -1779,7 +1779,7 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
                     if t:
                         seg_lines.append(t)
 
-            seg_text = _normalize_ws(" ".join(seg_lines))
+            seg_text = normalize_ws(" ".join(seg_lines))
             # Basic sanity: keep only if it begins with "Case Study N" and has some tail text
             if not seg_text or not re.match(r"^\s*Case\s*Study\s*{}\b".format(cs["case"]), seg_text, flags=re.I):
                 continue

@@ -16,7 +16,7 @@ import streamlit as st
 import statistics as stats
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.feature_extraction.text import TfidfVectorizer
-
+import fitz
 import requests
 from bs4 import BeautifulSoup
 
@@ -1840,43 +1840,34 @@ def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) 
 
 def format_manual_citation(meta: dict) -> str:
     """
-    Build a clean, human-readable citation line for the Course Booklet.
-
-    Rules:
-    - Always print page info first: "page <label> (PDF <n>)"
-    - If this chunk belongs to a Case Study, add "Case Study N" even for
-      non-headline paragraphs (via case_section fallback).
-    - If no case applies, but we have a paragraph number, append "para. N".
+    Compact citations for the Course Booklet:
+      - "see Course Booklet para. N" when a numbered paragraph is known and no case applies
+      - "see Course Booklet Case Study K" when a case section is known
+      - Page label (PDF n) is kept only as a fallback when neither para nor case is available
     """
-    paras      = meta.get("paras") or []
-    cases      = meta.get("cases") or []
-    case_sec   = meta.get("case_section")  # enclosing Case Study (int) or None
+    paras = meta.get("paras") or []
+    cases = meta.get("cases") or []
+    case_sec = meta.get("case_section")  # enclosing case, may be int or None
     page_label = meta.get("page_label") or ""
-    pdf_p      = meta.get("page_num")
+    pdf_p = meta.get("page_num")
 
-    anchors = []
-
-    # Page anchor
-    if page_label or pdf_p:
-        if page_label and pdf_p:
-            anchors.append(f"page {page_label} (PDF {pdf_p})")
-        elif page_label:
-            anchors.append(f"page {page_label}")
-        else:
-            anchors.append(f"PDF {pdf_p}")
-    else:
-        anchors.append("PDF page ?")
-
-    # Case anchor: prefer explicit case on the chunk, else enclosing section
+    # Prefer explicit case on the chunk; else fall back to enclosing section
     case_n = cases[0] if cases else (case_sec if isinstance(case_sec, int) else None)
+
     if case_n:
-        anchors.append(f"Case Study {case_n}")
+        return f"see Course Booklet Case Study {case_n}"
 
-    # Paragraph anchor only if we don't already have a Case Study tag
-    if paras and not case_n:
-        anchors.append(f"para. {paras[0]}")
+    if paras:
+        return f"see Course Booklet para. {paras[0]}"
 
-    return "Course Booklet — " + ", ".join(anchors)
+    # Fallback if we have no anchors (rare)
+    if page_label and pdf_p:
+        return f"see Course Booklet (page {page_label}, PDF {pdf_p})"
+    if page_label:
+        return f"see Course Booklet (page {page_label})"
+    if pdf_p:
+        return f"see Course Booklet (PDF {pdf_p})"
+    return "see Course Booklet"
 
 # ---- Simple page cleaner for booklet parsing ----
 def clean_page_text(t: str) -> str:

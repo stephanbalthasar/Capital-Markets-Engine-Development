@@ -1523,7 +1523,6 @@ def manual_chunk_relevant(text: str, extracted_keywords: list[str], user_query: 
     tgt = text.lower()
     return any(k in tgt for k in (keys + q_terms))
 
-
 def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend,
                                   extracted_keywords, user_query: str = "",
                                   top_k_pages=8, chunk_words=170):

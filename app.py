@@ -2307,8 +2307,8 @@ with colA:
             st.markdown("### 🧭 Narrative Feedback")
             if api_key:
                 # Trim large blocks *before* building the prompt
-                sources_block = truncate_block(sources_block, 1200)
-                excerpts_block = truncate_block(excerpts_block, 3200)
+                sources_block = truncate_block(sources_block, 800)
+                excerpts_block = truncate_block(excerpts_block, 1800)
             
                 # Hard rule included here with correct quoting (no stray backslash)
                 hard_rule = (

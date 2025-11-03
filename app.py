@@ -23,6 +23,185 @@ from bs4 import BeautifulSoup
 # ---------------- Build fingerprint (to verify latest deployment) ----------------
 APP_HASH = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:10]
 
+# ---------------- v2: geometry-first left-gutter paragraph parser ----------------
+# Place this near the top, after your imports.
+
+import re
+import statistics
+
+# Stand-alone integer for paragraph number (1..9999)
+INT_ONLY_RE     = re.compile(r"^\d{1,4}$")
+# Headings like "1.1", "3.2.1" should NOT be treated as numbered paragraphs
+HEADING_NUM_RE  = re.compile(r"^\d+(?:\.\d+)+")
+
+# Case Study headers (body line starts with "Case Study N")
+CASE_LINE_RE_V2 = re.compile(r"^\s*Case\s*Study\s*(\d{1,4})\b", re.I)
+
+
+def _is_bold_span(span: dict) -> bool:
+    """Heuristic: treat fonts containing 'Bold' as bold."""
+    fname = (span.get("font") or "").lower()
+    return "bold" in fname
+
+
+def _modal_body_size(spans):
+    """Estimate dominant body font size via mode/median of span sizes."""
+    sizes = [round(float(s.get("size", 0.0)), 1) for s in spans if float(s.get("size", 0.0)) > 0.0]
+    if not sizes:
+        return 10.0
+    try:
+        return float(statistics.mode(sizes))
+    except statistics.StatisticsError:
+        return float(statistics.median(sizes))
+
+
+def _collect_spans(page):
+    """Collect all span boxes with text and geometry from a PDF page."""
+    pd = page.get_text("dict")
+    spans = []
+    for b in pd.get("blocks", []):
+        for l in b.get("lines", []):
+            for s in l.get("spans", []):
+                txt = re.sub(r"\s+", " ", (s.get("text") or "")).strip()
+                if not txt:
+                    continue
+                x0, y0, x1, y1 = s.get("bbox", [0, 0, 0, 0])
+                spans.append({
+                    "text": txt,
+                    "x0": float(x0), "y0": float(y0),
+                    "x1": float(x1), "y1": float(y1),
+                    "yc": float(y0 + y1) / 2.0,
+                    "font": s.get("font"),
+                    "size": float(s.get("size", 0.0)),
+                    "flags": s.get("flags", 0),
+                })
+    return spans
+
+
+def _detect_gutter_bound(spans):
+    """
+    Compute a dynamic left-gutter boundary: the numeric badge must sit left of body text.
+    We take the ~5th percentile x0 as a left edge and add ~45pt as the allowed gutter width.
+    """
+    xs = sorted(s["x0"] for s in spans)
+    if not xs:
+        return 60.0
+    left_edge = xs[max(0, int(0.05 * len(xs)) - 1)]
+    return left_edge + 45.0  # tweakable: if anchors are missed, try 55–65
+
+
+def _extract_case_headers(lines):
+    """Find 'Case Study N' headers on body lines (not in the gutter)."""
+    out = []
+    for ln in lines:
+        text = ln["text"]
+        m = CASE_LINE_RE_V2.match(text)
+        if m:
+            out.append({"case": int(m.group(1)), "y0": ln["y0"], "yc": ln["yc"]})
+    return out
+
+
+def _extract_page_paragraphs_v2(page):
+    """
+    Return: (para_items, case_headers)
+      para_items: list of {para, y0, yc, text}
+      case_headers: list of {case, y0, yc}
+    """
+    spans = _collect_spans(page)
+    if not spans:
+        return [], []
+
+    body_size = _modal_body_size(spans)
+    gutter_x  = _detect_gutter_bound(spans)
+
+    # Exclude page header band (top) and footnote band (bottom).
+    page_h      = float(page.rect.height)
+    top_band_y  = 0.06 * page_h    # top ~6% = header area
+    foot_band   = 0.14 * page_h    # bottom ~14% = typical footnotes
+    bot_band_y  = page_h * (1.0 - 0.14)
+
+    # Build coarse "lines" by grouping spans with similar yc
+    by_y = {}
+    for s in spans:
+        yk = round(s["yc"], 1)
+        ln = by_y.setdefault(yk, {"y0": s["y0"], "yc": s["yc"], "x0": s["x0"], "text": ""})
+        ln["y0"]  = min(ln["y0"], s["y0"])
+        ln["x0"]  = min(ln["x0"], s["x0"])
+        ln["text"] = (ln["text"] + " " + s["text"]).strip() if ln["text"] else s["text"]
+    lines = sorted(by_y.values(), key=lambda d: d["yc"])
+
+    # Case Study headers in body area (not header/footer)
+    case_headers = [ch for ch in _extract_case_headers(lines)
+                    if top_band_y < ch["y0"] < bot_band_y]
+
+    # --- Detect left-gutter paragraph anchors ---
+    anchors = []
+    for s in spans:
+        t = s["text"]
+        if HEADING_NUM_RE.match(t):        # e.g. "1.1", "3.2.1"
+            continue
+        if not INT_ONLY_RE.match(t):       # must be pure integer
+            continue
+        if not _is_bold_span(s):           # prefer bold-number badges
+            continue
+        if s["x0"] > gutter_x:             # must sit in gutter, not body
+            continue
+        if s["y0"] < top_band_y or s["y0"] > bot_band_y:
+            continue
+        # number font size roughly equals body font size (±35%)
+        if not (0.85 * body_size <= s["size"] <= 1.35 * body_size):
+            continue
+        anchors.append({"para": int(t), "y0": s["y0"], "yc": s["yc"]})
+
+    # If none found, relax bold requirement (some PDFs encode bold oddly)
+    if not anchors:
+        for s in spans:
+            t = s["text"]
+            if HEADING_NUM_RE.match(t) or not INT_ONLY_RE.match(t):
+                continue
+            if s["x0"] > gutter_x or s["y0"] < top_band_y or s["y0"] > bot_band_y:
+                continue
+            if s["size"] >= 1.05 * body_size:  # slightly larger than body
+                anchors.append({"para": int(t), "y0": s["y0"], "yc": s["yc"]})
+
+    anchors.sort(key=lambda a: a["yc"])
+    if not anchors:
+        return [], case_headers
+
+    # --- Collect paragraph text to the right between this and next anchor ---
+    # Keep only body spans (exclude small-footnote text and anything in footer band)
+    body_spans = [s for s in spans
+                  if (top_band_y <= s["y0"] <= bot_band_y)
+                  and s["x0"] > gutter_x
+                  and s["size"] >= 0.9 * body_size]
+
+    para_items = []
+    for i, a in enumerate(anchors):
+        y_top = (anchors[i - 1]["yc"] + a["yc"]) / 2.0 if i > 0 else a["y0"] - 4.0
+        y_bot = (a["yc"] + anchors[i + 1]["yc"]) / 2.0 if i + 1 < len(anchors) else bot_band_y
+
+        chunks = [s for s in body_spans if y_top <= s["yc"] <= y_bot]
+        chunks.sort(key=lambda s: (round(s["yc"], 1), s["x0"]))  # reading order
+        text = " ".join(s["text"] for s in chunks)
+        text = re.sub(r"\s+", " ", text).strip()
+        if text:
+            para_items.append({"para": a["para"], "y0": a["y0"], "yc": a["yc"], "text": text})
+
+    return para_items, case_headers
+
+
+# ---- Wrapper: replace your original _extract_page_paragraphs with this ----
+USE_V2_GUTTER_PARSER = True
+
+def _extract_page_paragraphs(page):
+    if USE_V2_GUTTER_PARSER:
+        return _extract_page_paragraphs_v2(page)
+    # Else: (legacy path) put your old implementation here, if you want a runtime switch
+    # return _extract_page_paragraphs_legacy(page)
+    return [], []
+# ------------------------------------------------------------------------------
+
+
 # ---------- Public helpers you will call from the app ----------
 def bold_section_headings(reply: str) -> str:
     """

@@ -371,40 +371,55 @@ def load_booklet_anchors(docx_source: Union[str, IO[bytes]]) -> Tuple[List[Dict[
 
 # ---------- Public helpers you will call from the app ----------
 def add_good_catch_for_optionals(reply: str, rubric: dict) -> str:
+    import re
     bonus = rubric.get("bonus") or []
     if not reply or not bonus:
         return reply
 
-    # Build short bullets like: “Good catch: § 33 WpHG — correct but optional for this question.”
     bullets = []
     for b in bonus[:3]:  # keep it tight
         name = b.get("issue") or "Additional point"
         bullets.append(f"• Good catch: {name} — correct, but optional for this question.")
 
-    # Insert under **Suggestions** (create the section if needed)
-    if re.search(r"(?im)^\s*\*\*Suggestions\*\*:\s*$", reply):
-        reply = re.sub(r"(?im)^\s*\*\*Suggestions\*\*:\s*$",
-                       "**Suggestions**:\n" + "\n".join(bullets) + "\n",
-                       reply, count=1)
+    # Accept **Suggestions** with or without colon; normalise to with-colon
+    suggestions_hdr = re.compile(r"(?im)^\s*\*\*Suggestions\*\*:?\s*$")
+    if suggestions_hdr.search(reply):
+        reply = suggestions_hdr.sub("**Suggestions**:\n" + "\n".join(bullets) + "\n", reply, count=1)
     else:
         reply = reply.rstrip() + "\n\n**Suggestions**:\n" + "\n".join(bullets) + "\n"
-
     return reply
 
 def derive_primary_scope(model_answer_slice: str, top_k: int = 2) -> set[str]:
     """
-    Find the dominant legal regimes in the question slice (generic).
-    Returns e.g. {"MAR"} or {"PR","MiFID II"}; never hard-codes per question.
+    Infer the dominant legal regime(s) for the selected question from its model-answer slice.
+    Uses boundary-aware counts and penalizes regimes that are explicitly marked
+    "not expected / not required / outside scope". Generic and scalable.
     """
-    text = (model_answer_slice or "").lower()
-    # Generic list of acts/acronyms you already handle elsewhere.
-    acts = ["mar", "pr", "mifid ii", "mifir", "td", "wphg", "wpüg"]
-    counts = {a: text.count(a) for a in acts}
-    # Also downrank tokens preceded by "not expected", "not required", "outside scope"
-    for a in acts:
-        if re.search(rf"(not expected|not required|outside (the )?scope).{{0,60}}\b{re.escape(a)}\b", text):
-            counts[a] = max(0, counts[a] - 100)  # very negative signal
-    # Pick non-zero top regimes
+    import re
+    text = (model_answer_slice or "")
+
+    # Boundary-aware patterns; include common aliases. Extendable over time.
+    acts = {
+        "mar":      r"\bMAR\b|\bMarket Abuse Regulation\b",
+        "pr":       r"\bPR\b|\bProspectus Regulation\b|\bRegulation\s*\(EU\)\s*2017/1129\b",
+        "mifid ii": r"\bMiFID\s*II\b|\bDirective\s*2014/65/EU\b",
+        "mifir":    r"\bMiFIR\b|\bRegulation\s*600/2014\b",
+        "td":       r"\bTD\b|\bTransparency Directive\b|\bDirective\s*2004/109/EC\b",
+        "wphg":     r"\bWpHG\b",
+        "wpüg":     r"\bWp[üu]G\b",
+    }
+
+    def count_hits(pattern: str) -> int:
+        return len(re.findall(pattern, text, flags=re.I))
+
+    counts = {k: count_hits(pat) for k, pat in acts.items()}
+
+    # Strongly downrank regimes flagged as out-of-scope in the slice itself.
+    for k, pat in acts.items():
+        penalty_pat = rf"(?:not\s+expected|not\s+required|outside(?:\s+the)?\s+scope).{{0,60}}(?:{pat})"
+        if re.search(penalty_pat, text, flags=re.I):
+            counts[k] = max(0, counts[k] - 100)
+
     top = [k for k, v in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])) if v > 0][:top_k]
     return set(top)
 
@@ -868,7 +883,6 @@ def extract_issues_from_model_answer(model_answer: str, llm_api_key: str) -> lis
         }]
 
     return issues
-
 def generate_rubric_from_model_answer(student_answer: str, model_answer: str, backend, llm_api_key: str, weights: dict) -> dict:
     extracted_issues = extract_issues_from_model_answer(model_answer, llm_api_key)
     if not extracted_issues:
@@ -878,6 +892,7 @@ def generate_rubric_from_model_answer(student_answer: str, model_answer: str, ba
             "final_score": 0.0,
             "per_issue": [],
             "missing": [],
+            "bonus": [],
             "substantive_flags": []
         }
 
@@ -887,6 +902,7 @@ def generate_rubric_from_model_answer(student_answer: str, model_answer: str, ba
 
     per_issue, tot, got = [], 0, 0
     bonus = []
+
     for issue in extracted_issues:
         pts = issue.get("importance", 5) * 2
         tot += pts
@@ -894,38 +910,42 @@ def generate_rubric_from_model_answer(student_answer: str, model_answer: str, ba
         got += sc
         per_issue.append({
             "issue": issue["name"],
+            "required": issue.get("required", True),          # <-- carry through
+            "scope_laws": issue.get("scope_laws", []),        # <-- carry through
             "max_points": pts,
             "score": sc,
             "keywords_hit": hits,
             "keywords_total": issue["keywords"],
         })
+        # "Good catch" for optional issues the student actually covered
         if not issue.get("required", True) and hits:
             bonus.append({
                 "issue": issue["name"],
                 "hits": hits,
                 "scope_laws": issue.get("scope_laws", []),
             })
-    
+
     cov_pct = 100.0 * got / max(1, tot)
     final = (weights["similarity"] * sim_pct + weights["coverage"] * cov_pct) / (weights["similarity"] + weights["coverage"])
 
+    # Only required issues can be marked as "missing"
     missing = []
     for row in per_issue:
         if not row.get("required", True):
-            continue  # <-- never mark optional as missing
+            continue  # <-- optional issues are never missing
         missed = [kw for kw in row["keywords_total"] if not keyword_present(student_answer, kw)]
         if missed:
             missing.append({"issue": row["issue"], "missed_keywords": missed})
 
     substantive_flags = detect_substantive_flags(student_answer)
-    
+
     return {
         "similarity_pct": round(sim_pct, 1),
         "coverage_pct": round(cov_pct, 1),
         "final_score": round(final, 1),
         "per_issue": per_issue,
         "missing": missing,
-        "bonus": bonus,   # <— add this
+        "bonus": bonus,
         "substantive_flags": substantive_flags,
     }
 

@@ -1875,69 +1875,69 @@ with st.sidebar:
         except Exception as e:
             st.exception(e)
 
-# --- Sidebar: Booklet Inspector (Word) ---
-st.divider()
-st.subheader("📄 Booklet Inspector")
-
-docx_source = BOOKLET  # uses your constant; you could also wire in an uploader override
-
-try:
-    records, _chunks, _metas = load_booklet_anchors(docx_source)
-    total = len(records)
-    if total == 0:
-        st.info("No anchors found in the booklet.")
-    else:
-        anchors_per_page = st.number_input(
-            "Anchors per virtual page",
-            min_value=5, max_value=50, value=12, step=1,
-            help="Virtual page size = how many anchors (paras/cases) per page."
-        )
-        max_pages = max(1, math.ceil(total / anchors_per_page))
-        virt_page = st.number_input(
-            "Virtual page #",
-            min_value=1, max_value=max_pages, value=1, step=1
-        )
-
-        start = (virt_page - 1) * anchors_per_page
-        end = min(start + anchors_per_page, total)
-        st.caption(f"Showing anchors {start + 1}–{end} of {total}")
-
-        # Render anchors on this virtual page
-        for r in records[start:end]:
-            if r["kind"] == "para":
-                label = f"para {r['id']}"
-            elif r["kind"] == "case":
-                label = f"Case Study {r['id']}"
-            else:
-                label = "—"
-            st.markdown(f"- **{label}** — {r['preview']}…")
-
-        # Quick lookup for a specific para or case
-        st.markdown("**Lookup**")
-        lookup = st.text_input("Type e.g. `para 115` or `case 30`")
-        if lookup:
-            m_para = re.match(r"^\s*para\s+(\d{1,4})\s*$", lookup, re.I)
-            m_case = re.match(r"^\s*case\s+(\d{1,4})\s*$", lookup, re.I)
-            target_kind, target_id = None, None
-            if m_para:
-                target_kind, target_id = "para", int(m_para.group(1))
-            elif m_case:
-                target_kind, target_id = "case", int(m_case.group(1))
-
-            if target_kind:
-                hits = [r for r in records if r["kind"] == target_kind and r["id"] == target_id]
-                if not hits:
-                    st.warning(f"No match for {lookup.strip()}.")
+    # --- Sidebar: Booklet Inspector (Word) ---
+    st.divider()
+    st.subheader("📄 Booklet Inspector")
+    
+    docx_source = BOOKLET  # uses your constant; you could also wire in an uploader override
+    
+    try:
+        records, _chunks, _metas = load_booklet_anchors(docx_source)
+        total = len(records)
+        if total == 0:
+            st.info("No anchors found in the booklet.")
+        else:
+            anchors_per_page = st.number_input(
+                "Anchors per virtual page",
+                min_value=5, max_value=50, value=12, step=1,
+                help="Virtual page size = how many anchors (paras/cases) per page."
+            )
+            max_pages = max(1, math.ceil(total / anchors_per_page))
+            virt_page = st.number_input(
+                "Virtual page #",
+                min_value=1, max_value=max_pages, value=1, step=1
+            )
+    
+            start = (virt_page - 1) * anchors_per_page
+            end = min(start + anchors_per_page, total)
+            st.caption(f"Showing anchors {start + 1}–{end} of {total}")
+    
+            # Render anchors on this virtual page
+            for r in records[start:end]:
+                if r["kind"] == "para":
+                    label = f"para {r['id']}"
+                elif r["kind"] == "case":
+                    label = f"Case Study {r['id']}"
                 else:
-                    st.success(f"Found {len(hits)} match(es):")
-                    for h in hits[:20]:  # cap display
-                        st.markdown(f"- **#{h['idx']}** {target_kind} {h['id']} — {h['preview']}…")
-            else:
-                st.info("Enter `para N` or `case K`.")
-except FileNotFoundError:
-    st.error(f"Booklet not found at: {docx_source}")
-except Exception as e:
-    st.exception(e)
+                    label = "—"
+                st.markdown(f"- **{label}** — {r['preview']}…")
+    
+            # Quick lookup for a specific para or case
+            st.markdown("**Lookup**")
+            lookup = st.text_input("Type e.g. `para 115` or `case 30`")
+            if lookup:
+                m_para = re.match(r"^\s*para\s+(\d{1,4})\s*$", lookup, re.I)
+                m_case = re.match(r"^\s*case\s+(\d{1,4})\s*$", lookup, re.I)
+                target_kind, target_id = None, None
+                if m_para:
+                    target_kind, target_id = "para", int(m_para.group(1))
+                elif m_case:
+                    target_kind, target_id = "case", int(m_case.group(1))
+    
+                if target_kind:
+                    hits = [r for r in records if r["kind"] == target_kind and r["id"] == target_id]
+                    if not hits:
+                        st.warning(f"No match for {lookup.strip()}.")
+                    else:
+                        st.success(f"Found {len(hits)} match(es):")
+                        for h in hits[:20]:  # cap display
+                            st.markdown(f"- **#{h['idx']}** {target_kind} {h['id']} — {h['preview']}…")
+                else:
+                    st.info("Enter `para N` or `case K`.")
+    except FileNotFoundError:
+        st.error(f"Booklet not found at: {docx_source}")
+    except Exception as e:
+        st.exception(e)
 
 # Main UI
 st.image("assets/logo.png", width=240)

@@ -1537,16 +1537,20 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
         model_anchors = _anchors_from_model(model_answer_filtered)
     except Exception:
         model_anchors = []
-    
-    if model_anchors:
-        anchors_lower = [a.lower() for a in model_anchors]
-        filtered_chunks, filtered_metas = [], []
-        for chunk, meta in zip(manual_chunks, manual_metas):
-            if any(anchor in chunk.lower() for anchor in anchors_lower):
-                filtered_chunks.append(chunk)
-                filtered_metas.append(meta)
-        if filtered_chunks:
-            manual_chunks, manual_metas = filtered_chunks, filtered_metas
+        def normalize_text(s: str) -> str:
+        return re.sub(r"\s+", " ", s.lower()).strip()
+            
+        model_anchors = _anchors_from_model(model_answer_filtered)
+        if model_anchors:
+            anchors_normalized = [normalize_text(a) for a in model_anchors]
+            filtered_chunks, filtered_metas = [], []
+            for chunk, meta in zip(manual_chunks, manual_metas):
+                chunk_norm = normalize_text(chunk)
+                if any(anchor in chunk_norm for anchor in anchors_normalized):
+                    filtered_chunks.append(chunk)
+                    filtered_metas.append(meta)
+            if filtered_chunks:
+                manual_chunks, manual_metas = filtered_chunks, filtered_metas
     except Exception as e:
         st.warning(f"Could not load course manual: {e}")
     try:

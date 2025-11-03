@@ -84,6 +84,19 @@ def _style_is_heading(p: Paragraph) -> bool:
     except Exception:
         return False
 
+def _paragraph_is_para_anchor_by_style(p: Paragraph) -> bool:
+    """
+    Detect 'numbered paragraph' anchors that are rendered via a paragraph style
+    (e.g., 'Standard with Para Numbering') rather than a visible digit.
+    We match loosely to be resilient against localized style names.
+    """
+    try:
+        name = (p.style.name or "").lower()
+        # English: "para", "number"; German Word UIs often show English custom style names too.
+        return ("para" in name and "number" in name)
+    except Exception:
+        return False
+
 def _first_nonempty_run(p: Paragraph):
     for r in p.runs:
         t = (r.text or "").strip()
@@ -177,22 +190,27 @@ def _flush(current: Dict[str, Any], buf: List[str],
     out_chunks.append(text)
     out_metas.append(meta)
 
-def parse_booklet_docx(docx_source: Union[str, IO[bytes]]) -> Tuple[List[str], List[Dict[str, Any]]]:
+def parse_booklet_docx(docx_source: Union[str, IO[bytes]]
+                       ) -> Tuple[List[str], List[Dict[str, Any]]]:
     """
     Parse the Course Booklet .docx into (chunks, metas) with robust detection:
-    - Case Study sections: lines starting with "Case Study <N>"
-    - Paragraph anchors: bold integer at line-start (either as a bold run or in left table cell)
-    - Continuation: collect subsequent lines until next anchor or next Case Study
-    - Do not treat Heading-styled lines as paragraph numbers
+      • Case Study sections: lines starting with "Case Study <N>"
+      • Paragraph anchors: (a) paragraph style-based numbering (e.g., "Standard with Para Numbering"),
+                           (b) visible bold integer at line-start,
+                           (c) left table-cell integer
+      • Continuation: collect subsequent lines until next anchor or next Case Study
+      • Headings are not treated as paragraph numbers
     """
     doc = Document(docx_source)
 
     chunks: List[str] = []
-    metas:  List[Dict[str, Any]] = []
-
+    metas: List[Dict[str, Any]] = []
     current: Dict[str, Any] = {}
     buf: List[str] = []
     current_case: int | None = None
+
+    # Running paragraph id to assign for style-based numbering when no explicit digits are present.
+    next_para_id: int = 0
 
     def start_case(k: int, heading_text: str = ""):
         nonlocal current, buf, current_case
@@ -200,63 +218,105 @@ def parse_booklet_docx(docx_source: Union[str, IO[bytes]]) -> Tuple[List[str], L
         current = {"cases": [k], "paras": [], "case_section": k}
         buf = [heading_text.strip()] if heading_text.strip() else []
         current_case = k
+
     def start_para(n: int, first_line: str):
         nonlocal current, buf
         _flush(current, buf, chunks, metas)
         current = {"paras": [n], "cases": [], "case_section": current_case}
         buf = [first_line.strip()] if first_line.strip() else []
 
-    for block in _iter_block_items(doc):  # paragraphs and tables in order
+    # Iterate paragraphs and tables in document order
+    for block in _iter_block_items(doc):
+
+        # ----------------- Plain paragraphs -----------------
         if isinstance(block, Paragraph):
             t = (block.text or "").strip()
             if not t:
                 continue
-            # Case Study headings (outside tables)
+
+            # Case Study heading outside tables
             m_case = CASE_RE.match(t)
             if m_case:
                 start_case(int(m_case.group(1)), t)
                 continue
-            # Paragraph-number anchor in a normal paragraph (bold digit at start)
+
+            # (A) Style-based paragraph anchor ("Standard with Para Numbering", etc.)
+            if _paragraph_is_para_anchor_by_style(block) and not _style_is_heading(block):
+                # Prefer explicit visible integer if present; otherwise assign the next sequential id.
+                explicit_n = _paragraph_anchor_number(block)
+                if explicit_n is not None:
+                    para_id = explicit_n
+                    if explicit_n > next_para_id:
+                        next_para_id = explicit_n
+                else:
+                    next_para_id += 1
+                    para_id = next_para_id
+
+                start_para(para_id, t)
+                continue
+
+            # (B) Visible bold integer at the start (your existing detection)
             n = _paragraph_anchor_number(block)
             if n is not None:
-                # use paragraph text without the leading number run if it stands alone
-                r, txt = _first_nonempty_run(block)
+                # If first run is just the number, drop it from the line
+                r, _txt = _first_nonempty_run(block)
                 rest = t
-                # If the first run is just the number, drop it from the first line
                 if r and re.fullmatch(r"\s*\d{1,4}\s*", r.text or ""):
                     rest = (t[len(r.text):] or "").strip() or t
-                first_line = (rest or t)
-                start_para(n, first_line)
+
+                if n > next_para_id:
+                    next_para_id = n
+                start_para(n, rest or t)
                 continue
-            # otherwise continuation
+
+            # Otherwise, continuation of current chunk
             if current:
                 buf.append(t)
             continue
 
-        # --- Tables (numbers in left column, text in right column) ---
+        # ----------------- Tables -----------------
         if isinstance(block, Table):
             for row in block.rows:
                 if _row_is_empty(row):
                     continue
-                left_txt = _cell_text(row.cells[0]) if len(row.cells) > 0 else ""
+
+                left_txt  = _cell_text(row.cells[0]) if len(row.cells) > 0 else ""
                 right_txt = _cell_text(row.cells[1]) if len(row.cells) > 1 else ""
-                # Case Study could also appear in table text:
+
+                # Case Study heading in a table cell?
                 m_case = CASE_RE.match(left_txt) or CASE_RE.match(right_txt)
                 if m_case:
                     start_case(int(m_case.group(1)), left_txt or right_txt)
                     continue
-                # Paragraph anchor in left cell
+                # (A) Style-based para anchor inside any cell of the row
+                style_anchor_in_row = False
+                if row.cells:
+                    for c in row.cells:
+                        for p in c.paragraphs:
+                            if _paragraph_is_para_anchor_by_style(p) and not _style_is_heading(p):
+                                style_anchor_in_row = True
+                                break
+                        if style_anchor_in_row:
+                            break
+                if style_anchor_in_row:
+                    next_para_id += 1
+                    first_line = (right_txt or left_txt).strip()
+                    start_para(next_para_id, first_line)
+                    continue
+
+                # (B) Numeric anchor in left cell (your existing table detection)
                 n = _table_row_anchor_number(row)
                 if n is not None:
-                    # Start new para with the right-cell text (preferred),
-                    # else take remaining left-cell text after the number.
                     first_line = right_txt.strip()
                     if not first_line:
-                        # remove the leading digits from left cell if present
+                        # remove leading digits from left cell if that's all we have
                         first_line = re.sub(r"^\s*\d{1,4}\s*", "", left_txt).strip()
+                    if n > next_para_id:
+                        next_para_id = n
                     start_para(n, first_line)
                     continue
-                # Otherwise, treat this row content as continuation
+
+                # Otherwise treat this row as continuation
                 cont = " ".join([x for x in [right_txt, left_txt] if x]).strip()
                 if cont and current:
                     buf.append(cont)

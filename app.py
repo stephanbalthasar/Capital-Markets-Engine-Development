@@ -1651,29 +1651,35 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
     return top_pages, source_lines
 
 # ---------------- LLM via Groq (free) ----------------
-def call_groq(messages: List[Dict], api_key: str, model_name: str = "llama-3.1-8b-instant",
-              temperature: float = 0.2, max_tokens: int = 700) -> str:
-        """
-        Groq OpenAI-compatible chat endpoint. Models like llama-3.1-8b-instant / 70b-instant are free.
-        """
-        throttle_groq()
+def call_groq(messages: List[Dict], api_key: str, model_name: str = "llama-3.1-8b-instant", temperature: float = 0.2, max_tokens: int = 700) -> str:
+    """
+    Groq OpenAI-compatible chat endpoint. Models like llama-3.1-8b-instant / 70b-instant are free.
+    """
+    throttle_groq()
+
     if not api_key:
         st.error("No GROQ_API_KEY found (add it to Streamlit Secrets).")
         return None
+
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
     data = {
         "model": model_name,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+
     try:
         r = requests.post(url, headers=headers, json=data, timeout=90)
         if r.status_code != 200:
-            # Show exact error so it's easy to fix
-            try: body = r.json()
-            except Exception: body = r.text
+            try:
+                body = r.json()
+            except Exception:
+                body = r.text
             st.error(f"Groq error {r.status_code}: {body}")
             return None
         return r.json()["choices"][0]["message"]["content"]

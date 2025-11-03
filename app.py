@@ -1718,180 +1718,225 @@ def _body_left_threshold(lines: list[dict]) -> float:
     idx = max(0, min(len(xs_sorted) - 1, int(0.40 * len(xs_sorted))))
     return xs_sorted[idx]
 
-def _extract_page_paragraphs(page):
+def _extract_page_paragraphs_v2(page):
     """
-    Returns: (para_items, case_headers)
-      para_items  = [{'para': N, 'y0': float, 'yc': float, 'text': str}, ...]
-      case_headers= [{'case': K, 'y0': float, 'yc': float}, ...]
+    Return:
+      para_items:  [{'para': N, 'y0': float, 'yc': float, 'text': str}]
+      case_headers:[{'case': K, 'y0': float, 'yc': float}]
+      case_zones: [{'case': K, 'y_top': float, 'y_bot': Optional[float], 'text': str}]
+         - y_bot = None means the case continues onto the next page (open zone).
     """
     spans = _collect_spans(page)
     if not spans:
-        return [], []
+        return [], [], []
 
     body_size = _modal_body_size(spans)
     gutter_x  = _detect_gutter_bound(spans)
 
-    page_h     = float(page.rect.height)
-    top_band_y = TOP_BAND_FRAC * page_h
-    bot_band_y = page_h * (1.0 - FOOT_BAND_FRAC)
+    page_h      = float(page.rect.height)
+    top_band_y  = 0.06 * page_h
+    bot_band_y  = page_h * (1.0 - 0.14)  # bottom ~14% for footnotes
 
-    # Case headers (unchanged)
-    lines = _group_lines(spans)
-    case_headers = _extract_case_headers(lines, top_band_y, bot_band_y)
+    # Build coarse "lines" to detect case headers
+    by_y = {}
+    for s in spans:
+        yk = round(s["yc"], 1)
+        ln = by_y.setdefault(yk, {"y0": s["y0"], "yc": s["yc"], "x0": s["x0"], "text": ""})
+        ln["y0"]  = min(ln["y0"], s["y0"])
+        ln["x0"]  = min(ln["x0"], s["x0"])
+        ln["text"] = (ln["text"] + " " + s["text"]).strip() if ln["text"] else s["text"]
+    lines = sorted(by_y.values(), key=lambda d: d["yc"])
 
-    # ---- candidate numeric anchors in the left gutter ----
-    anchors_candidates = []
+    # Case headers in body area
+    case_headers = [ch for ch in _extract_case_headers(lines)
+                    if top_band_y < ch["y0"] < bot_band_y]
+
+    # Detect left-gutter paragraph anchors (stand-alone integers; not headings)
+    anchors = []
     for s in spans:
         t = s["text"]
-        if HEADING_NUM_RE.match(t):            # reject "1.1" etc.
+        if HEADING_NUM_RE.match(t):
             continue
-        if not INT_ONLY_RE.match(t):           # must be pure integer
+        if not INT_ONLY_RE.match(t):
             continue
-        if s["x0"] > gutter_x:                 # must be in the left gutter
+        if s["x0"] > gutter_x:
             continue
-        if not (top_band_y <= s["y0"] <= bot_band_y):
+        if not _is_bold_span(s) and s["size"] < 1.05 * body_size:
             continue
-        ratio = (s["size"] / body_size) if body_size else 1.0
-        if _is_bold_span(s) or (SIZE_NEAR_BODY[0] <= ratio <= SIZE_NEAR_BODY[1]) or (ratio >= RELAX_SIZE_MIN):
-            anchors_candidates.append(s)
+        if s["y0"] < top_band_y or s["y0"] > bot_band_y:
+            continue
+        anchors.append({"para": int(t), "y0": s["y0"], "yc": s["yc"]})
 
-    if not anchors_candidates:
-        return [], case_headers
+    anchors.sort(key=lambda a: a["yc"])
 
-    # ---- require a NEAR-BY BODY SPAN to the right on the same/near line ----
-    body_spans_all = [s for s in spans
-                      if (top_band_y <= s["y0"] <= bot_band_y)
-                      and s["x0"] > gutter_x
-                      and s["size"] >= 0.9 * body_size]
+    # Establish case zones on this page: from each case header down to the first numbered para below it
+    # (or to the bottom of the body area if none exists on this page).
+    case_zones = []
+    for ch in case_headers:
+        # next numbered paragraph anchor below this case header (if any)
+        next_para = next((a for a in anchors if a["yc"] > ch["yc"]), None)
+        y_top = ch["yc"]
+        y_bot = next_para["yc"] if next_para else None  # open case if None on this page
 
-    def has_body_neighbor(a):
-        # body span within ±NEIGHBOR_Y_TOL pts vertically, to the right, with near-body size
-        ay = a["yc"]
-        for s in body_spans_all:
-            if abs(s["yc"] - ay) <= NEIGHBOR_Y_TOL and s["x0"] > gutter_x and s["size"] >= 0.9 * body_size:
+        # Collect body spans ONLY inside the case zone
+        zone_spans = []
+        for s in spans:
+            if not (top_band_y <= s["y0"] <= bot_band_y):
+                continue
+            if s["x0"] <= gutter_x:  # ignore gutter
+                continue
+            yc = s["yc"]
+            if yc >= y_top and (y_bot is None or yc < y_bot):
+                # body-size gate avoids grabbing footnote small text
+                if s["size"] >= 0.9 * body_size:
+                    zone_spans.append(s)
+
+        zone_spans.sort(key=lambda s: (round(s["yc"], 1), s["x0"]))
+        ztext = " ".join(s["text"] for s in zone_spans).strip()
+        case_zones.append({
+            "case": ch["case"],
+            "y_top": y_top,
+            "y_bot": y_bot,  # None => continues on next page
+            "text": re.sub(r"\s+", " ", ztext)
+        })
+
+    # Build paragraph items, but EXCLUDE any content that lies inside a case zone.
+    def _in_case_zone(yc: float) -> bool:
+        for z in case_zones:
+            if yc >= z["y_top"] and (z["y_bot"] is None or yc < z["y_bot"]):
                 return True
         return False
 
-    anchors = [{"para": int(s["text"]), "y0": s["y0"], "yc": s["yc"]}
-               for s in anchors_candidates if has_body_neighbor(s)]
-    anchors.sort(key=lambda a: a["yc"])
-    if not anchors:
-        # Nothing passed neighbor check → safer to return empty than hallucinate from footers
-        return [], case_headers
-
-    # ---- collect paragraph text between anchors (body column only, same bands) ----
     para_items = []
-    for i, a in enumerate(anchors):
-        y_top = (anchors[i - 1]["yc"] + a["yc"]) / 2.0 if i > 0 else a["y0"] - 3.0
-        y_bot = (a["yc"] + anchors[i + 1]["yc"]) / 2.0 if i + 1 < len(anchors) else bot_band_y
-        chunks = [s for s in body_spans_all if y_top <= s["yc"] <= y_bot]
-        chunks.sort(key=lambda s: (round(s["yc"], 1), s["x0"]))
-        text = " ".join(s["text"] for s in chunks)
-        text = re.sub(r"\s+", " ", text).strip()
-        if text:
-            para_items.append({"para": a["para"], "y0": a["y0"], "yc": a["yc"], "text": text})
+    if anchors:
+        # Pre-filter body spans (exclude gutter, header/footer and footnotes)
+        body_spans = [s for s in spans
+                      if (top_band_y <= s["y0"] <= bot_band_y)
+                      and s["x0"] > gutter_x
+                      and s["size"] >= 0.9 * body_size
+                      and not _in_case_zone(s["yc"])]
 
-    return para_items, case_headers
+        for i, a in enumerate(anchors):
+            y_top = (anchors[i - 1]["yc"] + a["yc"]) / 2.0 if i > 0 else a["y0"] - 4.0
+            y_bot = (a["yc"] + anchors[i + 1]["yc"]) / 2.0 if i + 1 < len(anchors) else bot_band_y
+            chunks = [s for s in body_spans if y_top <= s["yc"] <= y_bot]
+            chunks.sort(key=lambda s: (round(s["yc"], 1), s["x0"]))
+            text = " ".join(s["text"] for s in chunks).strip()
+            if text:
+                para_items.append({"para": a["para"], "y0": a["y0"], "yc": a["yc"], "text": re.sub(r"\s+", " ", text)})
+
+    return para_items, case_headers, case_zones
+
 # -------------------------------------------------------------------------------------------
+def _case_leading_text_on_page_until_first_para(page) -> str:
+    """Leading body text from the top of body area to just before the first numbered paragraph."""
+    spans = _collect_spans(page)
+    if not spans:
+        return ""
+    body_size = _modal_body_size(spans)
+    gutter_x  = _detect_gutter_bound(spans)
+    page_h      = float(page.rect.height)
+    top_band_y  = 0.06 * page_h
+    bot_band_y  = page_h * (1.0 - 0.14)
 
-def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170) -> tuple[list[str], list[dict]]:
-    """
-    Deterministic extraction:
-      • Each chunk corresponds to one numbered paragraph (paras=[N]).
-      • 'case_section' stores the enclosing "Case Study K" based on the nearest
-        preceding 'Case Study K ...' line (persists across pages).
-      • Very long paragraphs are split by sentences near 'chunk_words_hint' while
-        keeping the same anchors.
-    """
-    chunks, metas = [], []
-    try:
-        doc = fitz.open(pdf_path)
-    except Exception:
-        return [], []
+    # Find first numbered paragraph anchor on this page
+    anchors = []
+    for s in spans:
+        t = s["text"]
+        if HEADING_NUM_RE.match(t) or not INT_ONLY_RE.match(t):
+            continue
+        if s["x0"] > gutter_x:
+            continue
+        if not _is_bold_span(s) and s["size"] < 1.05 * body_size:
+            continue
+        if s["y0"] < top_band_y or s["y0"] > bot_band_y:
+            continue
+        anchors.append(s)
+    first_y = min((a["yc"] for a in anchors), default=None)
 
-    current_case_section: Optional[int] = None  # carried across pages
+    # Collect body spans from top to first_y (exclusive)
+    body_spans = [s for s in spans
+                  if (top_band_y <= s["y0"] <= bot_band_y)
+                  and s["x0"] > gutter_x
+                  and s["size"] >= 0.9 * body_size
+                  and (first_y is None or s["yc"] < first_y)]
+    body_spans.sort(key=lambda s: (round(s["yc"], 1), s["x0"]))
+    return " ".join(s["text"] for s in body_spans).strip()
+
+def extract_manual_chunks_with_refs(pdf_path: str, chunk_words_hint: int = 170):
+    import fitz
+    doc = fitz.open(pdf_path)
+
+    manual_chunks = []
+    manual_metas  = []
+
+    open_case = None  # {'case': int, 'text': str, 'start_page': label}
 
     for pno in range(len(doc)):
         page = doc.load_page(pno)
         page_label = page.get_label() or str(pno + 1)
 
-        para_items, case_starts = _extract_page_paragraphs(page)
-        # --- NEW: build explicit case-chunks (prompts / case notes) on this page ---
-        # We slice from each "Case Study N" line to the next "Case Study ..." line.
-        lines = _page_lines_with_spans(page)
-        body_left = _body_left_threshold(lines)
+        para_items, case_headers, case_zones = _extract_page_paragraphs_v2(page)
 
-        # Collect segments for each case start detected on this page
-        for k, cs in enumerate(sorted(case_starts, key=lambda d: d["y0"])):
-            y0 = cs["y0"]
-            y1 = case_starts[k + 1]["y0"] if k + 1 < len(case_starts) else float("inf")
+        # 1) If a case was already open from a previous page, append the leading text up to the first numbered paragraph
+        if open_case is not None:
+            # Leading continuation: from top of body to first numbered para on this page
+            lead_text = _case_leading_text_on_page_until_first_para(page)
+            if lead_text.strip():
+                open_case["text"] += " " + lead_text.strip()
 
-            seg_lines = []
-            for L in lines:
-                # Keep only body-column text between y0..y1 (ignore left-gutter numbers)
-                if L["y0"] >= y0 - 0.2 and L["y0"] < y1 - 0.2 and L["x0"] >= body_left - 3.0:
-                    t = (L.get("text") or "").strip()
-                    if t:
-                        seg_lines.append(t)
+        # 2) Process case zones on this page
+        for z in case_zones:
+            if open_case is not None:
+                # close previous case first (shouldn't normally happen if markup is clean)
+                if open_case["text"].strip():
+                    manual_chunks.append(open_case["text"].strip())
+                    manual_metas.append({
+                        "kind": "case",
+                        "cases": [open_case["case"]],
+                        "page_label": open_case["start_page"],
+                        "page_num": pno  # first page number of the case
+                    })
+                open_case = None
 
-            seg_text = normalize_ws(" ".join(seg_lines))
-            # Basic sanity: keep only if it begins with "Case Study N" and has some tail text
-            if not seg_text or not re.match(r"^\s*Case\s*Study\s*{}\b".format(cs["case"]), seg_text, flags=re.I):
+            if z["y_bot"] is None:
+                # open case continues onto next page
+                open_case = {"case": z["case"], "text": z["text"], "start_page": page_label}
+            else:
+                # closed case on this page
+                if z["text"].strip():
+                    manual_chunks.append(z["text"].strip())
+                    manual_metas.append({
+                        "kind": "case",
+                        "cases": [z["case"]],
+                        "page_label": page_label,
+                        "page_num": pno + 1
+                    })
+
+        # 3) Emit numbered paragraphs normally
+        for it in para_items:
+            if not it["text"].strip():
                 continue
-
-            chunks.append(seg_text)
-            metas.append({
-                "pdf_index": pno,
+            manual_chunks.append(it["text"].strip())
+            manual_metas.append({
+                "kind": "para",
+                "paras": [it["para"]],
                 "page_label": page_label,
-                "page_num": pno + 1,
-                "paras": [],                  # <-- no paragraph number for case chunks
-                "cases": [cs["case"]],        # <-- cite as “Case Study N”
-                "case_section": cs["case"],   # keep the enclosing section too
-                "file": "EUCapML - Course Booklet.pdf",
-                "kind": "case",               # optional tag (may help future filtering)
+                "page_num": pno + 1
             })
-        # walk down the page; whenever a case start appears above the paragraph, update section
-        case_idx = 0
-        case_starts = sorted(case_starts, key=lambda d: d["y0"])
 
-        for it in sorted(para_items, key=lambda d: d["y0"]):
-            # advance case section
-            while case_idx < len(case_starts) and case_starts[case_idx]["y0"] <= it["y0"] + 0.5:
-                current_case_section = case_starts[case_idx]["case"]
-                case_idx += 1
-
-            para_no = it["para"]
-            text    = it["text"]
-
-            # split long paragraphs (keep anchors)
-            parts = [text]
-            words = text.split()
-            if len(words) > chunk_words_hint * 2:
-                bits = re.split(r"(?<=[\.\?\!…])\s+", text)
-                cur, acc, parts = [], 0, []
-                for s in bits:
-                    cur.append(s); acc += len(s.split())
-                    if acc >= chunk_words_hint:
-                        parts.append(" ".join(cur).strip()); cur, acc = [], 0
-                if cur:
-                    parts.append(" ".join(cur).strip())
-
-            for part in parts:
-                if not part:
-                    continue
-                chunks.append(part)
-                metas.append({
-                    "pdf_index": pno,
-                    "page_label": page_label,
-                    "page_num": pno + 1,
-                    "paras": [para_no],          # <- primary anchor
-                    "cases": [],                 # <- not used for paragraph chunks
-                    "case_section": current_case_section,  # <- enclosing Case Study (may be None)
-                    "file": "EUCapML - Course Booklet.pdf",
-                })
+    # 4) Close any open case at end-of-document
+    if open_case is not None and open_case["text"].strip():
+        manual_chunks.append(open_case["text"].strip())
+        manual_metas.append({
+            "kind": "case",
+            "cases": [open_case["case"]],
+            "page_label": open_case["start_page"],
+            "page_num": len(doc)
+        })
 
     doc.close()
-    return chunks, metas
+    return manual_chunks, manual_metas
 
 def format_manual_citation(meta: dict) -> str:
     """

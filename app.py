@@ -1998,7 +1998,176 @@ with st.sidebar:
             st.code((r.text or "")[:1000], language="json")
         except Exception as e:
             st.exception(e)
-        
+
+    #-------------- PDF Parser Diagnostics ------------------
+    # ---------- Course Booklet Diagnostics (Sidebar) ----------
+import io
+import pandas as pd
+
+@st.cache_data(show_spinner=False)
+def _scan_booklet_structure(pdf_path: str) -> dict:
+    """
+    Runs the same low-level parsing used by your engine to list, per page:
+      - starting Case Study headers (case_starts)
+      - numbered paragraphs with their text
+    Returns a dict with a 'pages' list; each page item has:
+      {'page_index', 'page_label', 'cases', 'paras', 'items': [{'para','y0','text'}]}
+    """
+    import fitz  # PyMuPDF
+    results = {
+        "pages": [],
+        "total_pages": 0,
+        "total_cases": 0,
+        "total_paras": 0,
+    }
+    try:
+        doc = fitz.open(pdf_path)
+    except Exception as e:
+        return {"error": f"Failed to open PDF at '{pdf_path}': {e}", **results}
+
+    total_cases = 0
+    total_paras = 0
+    pages_out = []
+
+    for pno in range(len(doc)):
+        page = doc.load_page(pno)
+        page_label = page.get_label() or str(pno + 1)
+
+        # Reuse your existing low-level parser on the page
+        try:
+            para_items, case_starts = _extract_page_paragraphs(page)
+        except Exception as e:
+            para_items, case_starts = [], []
+            st.warning(f"Parser error on page {pno+1}: {e}")
+
+        # Compact page summary
+        cases = [cs.get("case") for cs in (case_starts or []) if isinstance(cs.get("case"), int)]
+        paras = [it.get("para") for it in (para_items or []) if isinstance(it.get("para"), int)]
+        items = [
+            {
+                "para": it.get("para"),
+                "y0":   float(it.get("y0", 0.0)),
+                "text": (it.get("text") or "").strip(),
+            }
+            for it in (para_items or [])
+            if it.get("para") is not None
+        ]
+
+        pages_out.append({
+            "page_index": pno,
+            "page_label": page_label,
+            "cases": cases,
+            "paras": paras,
+            "items": items,
+        })
+        total_cases += len(cases)
+        total_paras += len(paras)
+
+    doc.close()
+    results.update({
+        "pages": pages_out,
+        "total_pages": len(pages_out),
+        "total_cases": total_cases,
+        "total_paras": total_paras,
+    })
+    return results
+
+
+def _structure_to_dataframe(scan: dict) -> pd.DataFrame:
+    """
+    Flattens the scan result into a table:
+      page_index | page_label | kind | anchor | y0 | excerpt
+    kind = 'para' or 'case'
+    """
+    rows = []
+    for p in scan.get("pages", []):
+        pidx = p.get("page_index")
+        plab = p.get("page_label")
+        # case headers
+        for c in p.get("cases", []):
+            rows.append({
+                "page_index": pidx + 1,
+                "page_label": plab,
+                "kind": "case",
+                "anchor": f"Case Study {c}",
+                "y0": None,
+                "excerpt": "",
+            })
+        # numbered paragraphs
+        for it in p.get("items", []):
+            txt = (it.get("text") or "").strip().replace("\n", " ")
+            excerpt = txt[:300] + ("…" if len(txt) > 300 else "")
+            rows.append({
+                "page_index": pidx + 1,
+                "page_label": plab,
+                "kind": "para",
+                "anchor": f"para. {it.get('para')}",
+                "y0": it.get("y0"),
+                "excerpt": excerpt,
+            })
+    df = pd.DataFrame(rows, columns=["page_index", "page_label", "kind", "anchor", "y0", "excerpt"])
+    return df.sort_values(["page_index", "kind", "anchor"]).reset_index(drop=True)
+
+
+def _download_csv_button(df: pd.DataFrame, label: str):
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label=label,
+        data=csv_bytes,
+        file_name="course_booklet_structure.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+
+# --- Sidebar UI ---
+with st.sidebar:
+    st.header("🔎 Course Booklet Diagnostics")
+    pdf_path_dbg = st.text_input(
+        "PDF path for scan",
+        value="assets/EUCapML - Course Booklet.pdf",
+        help="Use the exact path/name the engine uses."
+    )
+    run_scan = st.button("Scan booklet", use_container_width=True)
+
+    if run_scan:
+        scan = _scan_booklet_structure(pdf_path_dbg)
+        if scan.get("error"):
+            st.error(scan["error"])
+        else:
+            st.success(
+                f"Parsed {scan['total_pages']} pages • "
+                f"{scan['total_paras']} numbered paras • "
+                f"{scan['total_cases']} Case Study headers"
+            )
+
+            # Summary table
+            df = _structure_to_dataframe(scan)
+            st.caption("Per-page anchors (cases + paragraphs):")
+            st.dataframe(df, use_container_width=True, height=300)
+
+            # Page preview
+            if scan["pages"]:
+                pmax = scan["total_pages"]
+                sel = st.number_input("Preview page", min_value=1, max_value=pmax, value=1, step=1)
+                page = scan["pages"][sel - 1]
+
+                st.markdown(f"**Page {sel} (label: {page['page_label']})**")
+                if page["cases"]:
+                    st.write("Case Studies detected:", ", ".join(f"{c}" for c in page["cases"]))
+                else:
+                    st.write("Case Studies detected: —")
+
+                st.write(f"Paragraphs detected ({len(page['items'])}):")
+                for it in page["items"]:
+                    excerpt = it["text"][:450] + ("…" if len(it["text"]) > 450 else "")
+                    st.markdown(f"- **para. {it['para']}** @ y={it['y0']:.1f} — {excerpt}")
+
+            # Download
+            _download_csv_button(df, "⬇️ Download anchors (CSV)")
+
+
+
 # Main UI
 st.image("assets/logo.png", width=240)
 st.title("EUCapML Case Tutor")

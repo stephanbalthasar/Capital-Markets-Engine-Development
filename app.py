@@ -1523,45 +1523,37 @@ def manual_chunk_relevant(text: str, extracted_keywords: list[str], user_query: 
     tgt = text.lower()
     return any(k in tgt for k in (keys + q_terms))
 
-def retrieve_snippets_with_manual(
-    student_answer,
-    model_answer_filtered,
-    pages,
-    backend,
-    extracted_keywords,
-    user_query: str = "",
-    top_k_pages=8,
-    chunk_words=170
-):
-    def normalize_text(s: str) -> str:
-        return re.sub(r"\s+", " ", s.lower()).strip()
 
+def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend,
+                                  extracted_keywords, user_query: str = "",
+                                  top_k_pages=8, chunk_words=170):
     manual_chunks, manual_metas = [], []
     try:
         manual_chunks, manual_metas = extract_manual_chunks_with_refs(
             BOOKLET,
             chunk_words_hint=None
-        )
-        # Filter manual chunks using anchors from the model answer
-        try:
-            model_anchors = _anchors_from_model(model_answer_filtered)
-        except Exception:
-            model_anchors = []
-
-        if model_anchors:
-            anchors_normalized = [normalize_text(a) for a in model_anchors]
-            filtered_chunks, filtered_metas = [], []
-            for chunk, meta in zip(manual_chunks, manual_metas):
-                chunk_norm = normalize_text(chunk)
-                if any(anchor in chunk_norm for anchor in anchors_normalized):
-                    filtered_chunks.append(chunk)
-                    filtered_metas.append(meta)
-            if filtered_chunks:
-                manual_chunks, manual_metas = filtered_chunks, filtered_metas
+        )        
     except Exception as e:
         st.warning(f"Could not load course manual: {e}")
+    try:
+        _model_anchors = _anchors_from_model(model_answer_filtered)
+    except Exception as _e:
+        _model_anchors = []
 
-    # Filter manual chunks using keywords + the user's query AND case numbers, if any
+    if _model_anchors:
+        alow = [a.lower() for a in _model_anchors]
+        mc2, mm2 = [], []
+        for ch, meta in zip(manual_chunks, manual_metas):
+            txt = (ch or "").lower()
+            if any(a in txt for a in alow):
+                mc2.append(ch)
+                mm2.append(meta)
+        if mc2:  # shrink only if something kept
+            manual_chunks, manual_metas = mc2, mm2
+
+    # (keep the rest unchanged)
+
+    # ✅ Filter manual chunks using keywords + the user's query AND case numbers, if any
     selected_q = st.session_state.get("selected_question", "Question 1")
     uq_cases = detect_case_numbers(user_query or "")
     filtered_chunks, filtered_metas = [], []
@@ -1573,32 +1565,40 @@ def retrieve_snippets_with_manual(
             filtered_metas.append(m)
     if filtered_chunks:
         manual_chunks, manual_metas = filtered_chunks, filtered_metas
-
-    # Prepare manual meta tuples with a unique key per *page* so we can group snippets by page
+    
+    # ---- Prepare manual meta tuples with a unique key per *page* so we can group snippets by page
     manual_meta = []
     for m in manual_metas:
-        page_key = -(m["page_num"])
-        citation = format_manual_citation(m)
+        page_key = -(m["page_num"])  
+        citation = format_manual_citation(m)  # pre-format a nice line
+        # We store citation in 'title' so we can reuse downstream without new structures
         manual_meta.append((page_key, "manual://course-booklet", citation))
 
-    # Prepare web chunks
+    # ---- Prepare web chunks (unchanged)
+    # ---- Prepare web chunks (fixed: keep meta 1:1 with chunks)
     web_chunks, web_meta = [], []
+    selected_q = st.session_state.get("selected_question", "Question 1")
     for i, p in enumerate(pages):
         text = p.get("text", "")
         if not text:
             continue
+    # Optional relevance filter (keep if you added MANUAL_KEY_TERMS):
+        if 'web_page_relevant' in globals() and not web_page_relevant(text, extracted_keywords):
+            continue
+
         chunks_i = split_into_chunks(text, max_words=chunk_words)
         for ch in chunks_i:
             web_chunks.append(ch)
-            web_meta.append((i + 1, p["url"], p["title"]))
+            web_meta.append((i + 1, p["url"], p["title"]))  # append meta PER CHUNK
 
-    # Build combined corpus
+    # ---- Build combined corpus
     all_chunks = manual_chunks + web_chunks
-    all_meta = manual_meta + web_meta
+    all_meta   = manual_meta   + web_meta
+    # Defensive: keep chunks and meta in lockstep
     if len(all_chunks) != len(all_meta):
         m = min(len(all_chunks), len(all_meta))
         all_chunks = all_chunks[:m]
-        all_meta = all_meta[:m]
+        all_meta   = all_meta[:m]
 
     # Query vector built from student + model slice
     query = "\n\n".join([s for s in [user_query, student_answer, model_answer_filtered] if s])
@@ -1607,8 +1607,10 @@ def retrieve_snippets_with_manual(
     sims = [cos_sim(qv, v) for v in cvs]
     idx = np.argsort(sims)[::-1]
 
-    # Similarity floor to keep only reasonably relevant snippets
-    MIN_SIM = 0.22
+    # ✅ Similarity floor to keep only reasonably relevant snippets
+    MIN_SIM = 0.22  # tune if needed
+
+    # ---- Select top snippets grouped by (manual page) or (web page index)
     per_page = {}
     for j in idx:
         if sims[j] < MIN_SIM:
@@ -1621,11 +1623,13 @@ def retrieve_snippets_with_manual(
         if len(per_page) >= top_k_pages:
             break
 
-    # Order by key and build source lines
+    # Order by key and build source lines. For manual items we already have 'title' as a full citation line.
     top_pages = [per_page[k] for k in sorted(per_page.keys())][:top_k_pages]
+
     source_lines = []
     for i, tp in enumerate(top_pages):
         if tp["url"].startswith("manual://"):
+            # already a fully formatted citation like: "Course Booklet — p. ii (PDF p. 4), para. 115"
             source_lines.append(f"[{i+1}] {tp['title']}")
         else:
             source_lines.append(f"[{i+1}] {tp['title']} — {tp['url']}")

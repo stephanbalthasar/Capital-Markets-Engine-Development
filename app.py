@@ -47,58 +47,145 @@ def format_manual_citation(meta: Dict[str, Any]) -> str:
     return "see Course Booklet"
 
 # --- Word-based parser: extracts numbered paragraphs and case sections ---
-PARA_RE = re.compile(r"^(\d{1,4})\b(?!\.)")              # '12' NOT followed by '.' (avoids 1.1)
-CASE_RE = re.compile(r"^Case\s*Study\s*(\d{1,4})\b", re.I)  # 'Case Study 24'
-
-from typing import Union, IO, Any, List, Dict, Tuple
+import re
+from typing import List, Dict, Any, Tuple, Union, IO
 from docx import Document
+from docx.text.paragraph import Paragraph
+from docx.table import Table, _Cell
+from docx.oxml.text.paragraph import CT_P
+from docx.oxml.table import CT_Tbl
+from docx.document import Document as _Document
+
+PARA_RE_DOTSAFE = re.compile(r"^(\d{1,4})\b(?!\.)")              # 12 but not 1.1
+CASE_RE = re.compile(r"^Case\s*Study\s*(\d{1,4})\b", re.I)
+
+def _iter_block_items(parent):
+    """
+    Yield each paragraph or table within *parent* in document order.
+    Works for the main document and for table cells (nested content).
+    """
+    if isinstance(parent, _Document):
+        parent_elm = parent.element.body
+    elif isinstance(parent, _Cell):
+        parent_elm = parent._tc
+    else:
+        raise ValueError("Unsupported container for block iteration")
+
+    for child in parent_elm.iterchildren():
+        if isinstance(child, CT_P):
+            yield Paragraph(child, parent)
+        elif isinstance(child, CT_Tbl):
+            yield Table(child, parent)
+
+def _style_is_heading(p: Paragraph) -> bool:
+    try:
+        name = (p.style.name or "").lower()
+        return ("heading" in name) or ("überschrift" in name)  # German UI
+    except Exception:
+        return False
+
+def _first_nonempty_run(p: Paragraph):
+    for r in p.runs:
+        t = (r.text or "").strip()
+        if t:
+            return r, t
+    return None, ""
+
+def _run_is_bold(r) -> bool:
+    # direct bold or bold by character style; run.bold may be True/False/None
+    try:
+        return bool(r.bold) or (getattr(getattr(r, "font", None), "bold", False) is True)
+    except Exception:
+        return False
+
+def _paragraph_anchor_number(p: Paragraph) -> int | None:
+    """
+    Anchor if the first non-empty run is BOLD and consists only of digits (1–4).
+    Ignore headings and list-like '1.' forms.
+    """
+    if _style_is_heading(p):
+        return None
+    r, txt = _first_nonempty_run(p)
+    if not txt or not r:
+        return None
+    # Allow surrounding whitespace but require pure digits; avoid "1." etc.
+    m = re.fullmatch(r"\s*(\d{1,4})\s*", txt)
+    if m and _run_is_bold(r):
+        return int(m.group(1))
+    # Fallback: a plain-text line starting with digits not followed by '.' and not a heading
+    m2 = PARA_RE_DOTSAFE.match((p.text or "").strip())
+    if m2 and _run_is_bold(r):
+        return int(m2.group(1))
+    return None
+
+def _cell_text(cell: _Cell) -> str:
+    # Join all paragraphs; preserve spaces
+    parts = []
+    for para in cell.paragraphs:
+        t = (para.text or "").strip()
+        if t:
+            parts.append(t)
+    return " ".join(parts).strip()
+
+def _table_row_anchor_number(row) -> int | None:
+    """
+    Detect a left-cell bold integer (1–4 digits) used as the paragraph marker.
+    """
+    if not row.cells:
+        return None
+    left = row.cells[0]
+    if not left.paragraphs:
+        return None
+    p0 = left.paragraphs[0]
+    r, txt = _first_nonempty_run(p0)
+    if not txt:
+        # also allow left cell text like "  12  " without explicit runs
+        txt = (p0.text or "").strip()
+    m = re.fullmatch(r"\s*(\d{1,4})\s*", txt)
+    if m and (r is None or _run_is_bold(r)):  # if there is a run, require bold
+        return int(m.group(1))
+    return None
+
+def _row_is_empty(row) -> bool:
+    return all(not _cell_text(c) for c in row.cells)
+
+def _flush(current: Dict[str, Any], buf: List[str],
+           out_chunks: List[str], out_metas: List[Dict[str, Any]]) -> None:
+    if not current or not buf:
+        return
+    text = re.sub(r"\s+", " ", " ".join(buf)).strip()
+    if not text:
+        return
+    meta = {
+        "paras": current.get("paras", []),
+        "cases": current.get("cases", []),
+        "case_section": current.get("case_section"),
+    }
+    # running index for downstream grouping/sorting
+    meta["page_num"] = len(out_metas) + 1
+    if meta["cases"]:
+        k = meta["cases"][0]
+        meta["title"] = f"see Course Booklet Case Study {k}"
+        meta["url"]   = f"manual+docx://case/{k}"
+    elif meta["paras"]:
+        n = meta["paras"][0]
+        meta["title"] = f"see Course Booklet para. {n}"
+        meta["url"]   = f"manual+docx://para/{n}"
+    else:
+        meta["title"] = "see Course Booklet"
+        meta["url"]   = "manual+docx://booklet"
+    out_chunks.append(text)
+    out_metas.append(meta)
 
 def parse_booklet_docx(docx_source: Union[str, IO[bytes]]) -> Tuple[List[str], List[Dict[str, Any]]]:
     """
-    Parse the Course Booklet .docx into retrieval-ready (chunks, metas).
-
-    Returns:
-      chunks: list[str]                   # text blocks (numbered paragraphs or case sections)
-      metas:  list[dict] with fields:
-              - 'paras': [N] or []
-              - 'cases': [K] or []
-              - 'case_section': Optional[int]
-              - 'title': "see Course Booklet para. N" | "see Course Booklet Case Study K" | "see Course Booklet"
-              - 'url':   "manual+docx://para/N"     | "manual+docx://case/K"             | "manual+docx://booklet"
-              - 'page_num': int  (running index so downstream code can group/sort)
+    Parse the Course Booklet .docx into (chunks, metas) with robust detection:
+    - Case Study sections: lines starting with "Case Study <N>"
+    - Paragraph anchors: bold integer at line-start (either as a bold run or in left table cell)
+    - Continuation: collect subsequent lines until next anchor or next Case Study
+    - Do not treat Heading-styled lines as paragraph numbers
     """
     doc = Document(docx_source)
-
-    def _flush(current: Dict[str, Any], buf: List[str],
-               out_chunks: List[str], out_metas: List[Dict[str, Any]]) -> None:
-        if not current or not buf:
-            return
-        text = re.sub(r"\s+", " ", " ".join(buf)).strip()
-        if not text:
-            return
-
-        meta = {
-            "paras": current.get("paras", []),
-            "cases": current.get("cases", []),
-            "case_section": current.get("case_section"),
-        }
-        # add a simple running index so we can derive a grouping key later
-        meta["page_num"] = len(out_metas) + 1
-
-        if meta["cases"]:
-            k = meta["cases"][0]
-            meta["title"] = f"see Course Booklet Case Study {k}"
-            meta["url"]   = f"manual+docx://case/{k}"
-        elif meta["paras"]:
-            n = meta["paras"][0]
-            meta["title"] = f"see Course Booklet para. {n}"
-            meta["url"]   = f"manual+docx://para/{n}"
-        else:
-            meta["title"] = "see Course Booklet"
-            meta["url"]   = "manual+docx://booklet"
-
-        out_chunks.append(text)
-        out_metas.append(meta)
 
     chunks: List[str] = []
     metas:  List[Dict[str, Any]] = []
@@ -107,34 +194,72 @@ def parse_booklet_docx(docx_source: Union[str, IO[bytes]]) -> Tuple[List[str], L
     buf: List[str] = []
     current_case: int | None = None
 
-    for p in doc.paragraphs:
-        t = (p.text or "").strip()
-        if not t:
+    def start_case(k: int, heading_text: str = ""):
+        nonlocal current, buf, current_case
+        _flush(current, buf, chunks, metas)
+        current = {"cases": [k], "paras": [], "case_section": k}
+        buf = [heading_text.strip()] if heading_text.strip() else []
+        current_case = k
+    def start_para(n: int, first_line: str):
+        nonlocal current, buf
+        _flush(current, buf, chunks, metas)
+        current = {"paras": [n], "cases": [], "case_section": current_case}
+        buf = [first_line.strip()] if first_line.strip() else []
+
+    for block in _iter_block_items(doc):  # paragraphs and tables in order
+        if isinstance(block, Paragraph):
+            t = (block.text or "").strip()
+            if not t:
+                continue
+            # Case Study headings (outside tables)
+            m_case = CASE_RE.match(t)
+            if m_case:
+                start_case(int(m_case.group(1)), t)
+                continue
+            # Paragraph-number anchor in a normal paragraph (bold digit at start)
+            n = _paragraph_anchor_number(block)
+            if n is not None:
+                # use paragraph text without the leading number run if it stands alone
+                r, txt = _first_nonempty_run(block)
+                rest = t
+                # If the first run is just the number, drop it from the first line
+                if r and re.fullmatch(r"\s*\d{1,4}\s*", r.text or ""):
+                    rest = (t[len(r.text):] or "").strip() or t
+                first_line = (rest or t)
+                start_para(n, first_line)
+                continue
+            # otherwise continuation
+            if current:
+                buf.append(t)
             continue
 
-        # 1) Case Study header (starts a new section)
-        m_case = CASE_RE.match(t)
-        if m_case:
-            _flush(current, buf, chunks, metas)
-            buf = [t]
-            k = int(m_case.group(1))
-            current = {"cases": [k], "paras": [], "case_section": k}
-            current_case = k
-            continue
-
-        # 2) Numbered paragraph (stand-alone integer)
-        m_para = PARA_RE.match(t)
-        if m_para:
-            _flush(current, buf, chunks, metas)
-            buf = [t]
-            n = int(m_para.group(1))
-            current = {"paras": [n], "cases": [], "case_section": current_case}
-            continue
-
-        # 3) Continuation of current section/paragraph
-        if current:
-            buf.append(t)
-        # else: ignore preamble lines before the first anchor
+        # --- Tables (numbers in left column, text in right column) ---
+        if isinstance(block, Table):
+            for row in block.rows:
+                if _row_is_empty(row):
+                    continue
+                left_txt = _cell_text(row.cells[0]) if len(row.cells) > 0 else ""
+                right_txt = _cell_text(row.cells[1]) if len(row.cells) > 1 else ""
+                # Case Study could also appear in table text:
+                m_case = CASE_RE.match(left_txt) or CASE_RE.match(right_txt)
+                if m_case:
+                    start_case(int(m_case.group(1)), left_txt or right_txt)
+                    continue
+                # Paragraph anchor in left cell
+                n = _table_row_anchor_number(row)
+                if n is not None:
+                    # Start new para with the right-cell text (preferred),
+                    # else take remaining left-cell text after the number.
+                    first_line = right_txt.strip()
+                    if not first_line:
+                        # remove the leading digits from left cell if present
+                        first_line = re.sub(r"^\s*\d{1,4}\s*", "", left_txt).strip()
+                    start_para(n, first_line)
+                    continue
+                # Otherwise, treat this row content as continuation
+                cont = " ".join([x for x in [right_txt, left_txt] if x]).strip()
+                if cont and current:
+                    buf.append(cont)
 
     _flush(current, buf, chunks, metas)
     return chunks, metas

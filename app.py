@@ -19,6 +19,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 import requests
 from bs4 import BeautifulSoup
 BOOKLET = "assets/EUCapML - Course Booklet.docx"
+import time
+
 
 # ---------------- Build fingerprint (to verify latest deployment) ----------------
 APP_HASH = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:10]
@@ -370,6 +372,10 @@ def load_booklet_anchors(docx_source: Union[str, IO[bytes]]) -> Tuple[List[Dict[
 ## ---------------------------------------------------------------------------------------------
 
 # ---------- Public helpers you will call from the app ----------
+def throttle_groq(delay_seconds: float = 10):
+    """Sleep for a fixed delay to throttle Groq API calls."""
+    time.sleep(delay_seconds)
+
 def add_good_catch_for_optionals(reply: str, rubric: dict) -> str:
     import re
     bonus = rubric.get("bonus") or []
@@ -1647,6 +1653,7 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
 # ---------------- LLM via Groq (free) ----------------
 def call_groq(messages: List[Dict], api_key: str, model_name: str = "llama-3.1-8b-instant",
               temperature: float = 0.2, max_tokens: int = 700) -> str:
+    throttle_groq()
     """
     Groq OpenAI-compatible chat endpoint. Models like llama-3.1-8b-instant / 70b-instant are free.
     """

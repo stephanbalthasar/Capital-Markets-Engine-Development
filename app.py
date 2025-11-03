@@ -1532,7 +1532,22 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
         manual_chunks, manual_metas = extract_manual_chunks_with_refs(
             BOOKLET,
             chunk_words_hint=None
-        )        
+            )        
+        # Filter manual chunks using anchors from the model answer
+    try:
+        model_anchors = _anchors_from_model(model_answer_filtered)
+    except Exception:
+        model_anchors = []
+    
+    if model_anchors:
+        anchors_lower = [a.lower() for a in model_anchors]
+        filtered_chunks, filtered_metas = [], []
+        for chunk, meta in zip(manual_chunks, manual_metas):
+            if any(anchor in chunk.lower() for anchor in anchors_lower):
+                filtered_chunks.append(chunk)
+                filtered_metas.append(meta)
+        if filtered_chunks:
+            manual_chunks, manual_metas = filtered_chunks, filtered_metas
     except Exception as e:
         st.warning(f"Could not load course manual: {e}")
     try:

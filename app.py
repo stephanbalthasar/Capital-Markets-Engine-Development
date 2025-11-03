@@ -370,6 +370,44 @@ def load_booklet_anchors(docx_source: Union[str, IO[bytes]]) -> Tuple[List[Dict[
 ## ---------------------------------------------------------------------------------------------
 
 # ---------- Public helpers you will call from the app ----------
+def add_good_catch_for_optionals(reply: str, rubric: dict) -> str:
+    bonus = rubric.get("bonus") or []
+    if not reply or not bonus:
+        return reply
+
+    # Build short bullets like: “Good catch: § 33 WpHG — correct but optional for this question.”
+    bullets = []
+    for b in bonus[:3]:  # keep it tight
+        name = b.get("issue") or "Additional point"
+        bullets.append(f"• Good catch: {name} — correct, but optional for this question.")
+
+    # Insert under **Suggestions** (create the section if needed)
+    if re.search(r"(?im)^\s*\*\*Suggestions\*\*:\s*$", reply):
+        reply = re.sub(r"(?im)^\s*\*\*Suggestions\*\*:\s*$",
+                       "**Suggestions**:\n" + "\n".join(bullets) + "\n",
+                       reply, count=1)
+    else:
+        reply = reply.rstrip() + "\n\n**Suggestions**:\n" + "\n".join(bullets) + "\n"
+
+    return reply
+
+def derive_primary_scope(model_answer_slice: str, top_k: int = 2) -> set[str]:
+    """
+    Find the dominant legal regimes in the question slice (generic).
+    Returns e.g. {"MAR"} or {"PR","MiFID II"}; never hard-codes per question.
+    """
+    text = (model_answer_slice or "").lower()
+    # Generic list of acts/acronyms you already handle elsewhere.
+    acts = ["mar", "pr", "mifid ii", "mifir", "td", "wphg", "wpüg"]
+    counts = {a: text.count(a) for a in acts}
+    # Also downrank tokens preceded by "not expected", "not required", "outside scope"
+    for a in acts:
+        if re.search(rf"(not expected|not required|outside (the )?scope).{{0,60}}\b{re.escape(a)}\b", text):
+            counts[a] = max(0, counts[a] - 100)  # very negative signal
+    # Pick non-zero top regimes
+    top = [k for k, v in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])) if v > 0][:top_k]
+    return set(top)
+
 def bold_section_headings(reply: str) -> str:
     """
     Make core section headings bold and ensure a blank line after each.
@@ -805,7 +843,21 @@ def extract_issues_from_model_answer(model_answer: str, llm_api_key: str) -> lis
     raw = call_groq(messages, api_key=llm_api_key, model_name="llama-3.1-8b-instant", temperature=0.0, max_tokens=900)
     parsed = _try_parse_json(raw)
     issues = _coerce_issues(parsed)
+    primary = derive_primary_scope(model_answer)
 
+    def issue_scope_markers(it: dict) -> set[str]:
+        s = (" ".join(it.get("keywords", [])) + " " + it.get("name","")).lower()
+        out = set()
+        for a in ["mar","pr","mifid ii","mifir","td","wphg","wpüg"]:
+            if a in s:
+                out.add(a)
+        return out or set(["(unspecified)"])
+
+    for it in issues:
+        scopes = issue_scope_markers(it)
+        it["required"] = bool(primary & scopes)  # required if intersects the primary regime(s)
+        it["scope_laws"] = sorted(scopes)        # keep for explanation/debug
+    
     # Fallback to improved keyword extraction
     if not issues:
         keywords = improved_keyword_extraction(model_answer, max_keywords=20)
@@ -834,6 +886,7 @@ def generate_rubric_from_model_answer(student_answer: str, model_answer: str, ba
     sim_pct = max(0.0, min(100.0, 100.0 * (sim + 1) / 2))
 
     per_issue, tot, got = [], 0, 0
+    bonus = []
     for issue in extracted_issues:
         pts = issue.get("importance", 5) * 2
         tot += pts
@@ -846,25 +899,34 @@ def generate_rubric_from_model_answer(student_answer: str, model_answer: str, ba
             "keywords_hit": hits,
             "keywords_total": issue["keywords"],
         })
-
+        if not issue.get("required", True) and hits:
+            bonus.append({
+                "issue": issue["name"],
+                "hits": hits,
+                "scope_laws": issue.get("scope_laws", []),
+            })
+    
     cov_pct = 100.0 * got / max(1, tot)
     final = (weights["similarity"] * sim_pct + weights["coverage"] * cov_pct) / (weights["similarity"] + weights["coverage"])
 
     missing = []
     for row in per_issue:
+        if not row.get("required", True):
+            continue  # <-- never mark optional as missing
         missed = [kw for kw in row["keywords_total"] if not keyword_present(student_answer, kw)]
         if missed:
             missing.append({"issue": row["issue"], "missed_keywords": missed})
-    
-    substantive_flags = detect_substantive_flags(student_answer)
 
+    substantive_flags = detect_substantive_flags(student_answer)
+    
     return {
         "similarity_pct": round(sim_pct, 1),
         "coverage_pct": round(cov_pct, 1),
         "final_score": round(final, 1),
         "per_issue": per_issue,
         "missing": missing,
-        "substantive_flags": substantive_flags
+        "bonus": bonus,   # <— add this
+        "substantive_flags": substantive_flags,
     }
 
 def filter_model_answer_and_rubric(selected_question: str, model_answer: str, api_key: str) -> tuple[str, list[dict]]:
@@ -2229,6 +2291,7 @@ with colA:
                 )
                 reply = merge_to_suggestions(reply, student_answer, activate=agreement)
                 reply = tidy_empty_sections(reply)
+                reply = add_good_catch_for_optionals(reply, rubric) 
                 reply = prune_redundant_improvements(student_answer, reply)
                 reply = lock_out_false_mistakes(reply, rubric)
                 reply = lock_out_false_missing(reply, rubric)

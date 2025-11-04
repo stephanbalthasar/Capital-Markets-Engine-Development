@@ -1639,9 +1639,9 @@ def _manual_gate_and_score(chunk_text: str,
     return keep, score, diag
 
 @st.cache_resource(show_spinner=False)
-def _build_manual_index(docx_source: str, backend):
+def _build_manual_index(docx_source: str, encoder_key: str, _backend):
     chunks, metas = extract_manual_chunks_with_refs(docx_source, chunk_words_hint=None)
-    embs = embed_texts(chunks, backend) if chunks else np.zeros((0, 384))
+    embs = embed_texts(chunks, _backend) if chunks else np.zeros((0, 384))
     tags = [_extract_chunk_anchors(ch) for ch in chunks]
     return chunks, metas, embs, tags
 
@@ -1650,6 +1650,21 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
                                   top_k_pages=8, chunk_words=170):
 
     # --- Build/Load booklet index (cached) ---
+    # Build/Load booklet index (cached) — uses encoder_key (hashable) and ignores _backend in cache key
+    backend_kind = backend[0]  # "sbert" or "tfidf"
+    try:
+        booklet_mtime = os.path.getmtime(BOOKLET)
+    except OSError:
+        booklet_mtime = 0
+    encoder_key = f"{backend_kind}:{APP_HASH}:{booklet_mtime}"
+    
+    try:
+        manual_chunks_all, manual_metas_all, manual_embs_all, manual_tags_all = _build_manual_index(
+            BOOKLET, encoder_key, backend
+        )
+    except Exception as e:
+        st.warning(f"Could not load course manual: {e}")
+        manual_chunks_all, manual_metas_all, manual_embs_all, manual_tags_all = [], [], None, []
     try:
         manual_chunks_all, manual_metas_all, manual_embs_all, manual_tags_all = _build_manual_index(BOOKLET, backend)
     except Exception as e:

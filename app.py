@@ -13,7 +13,6 @@ import pathlib
 import re
 import requests
 import streamlit as st
-import statistics as stats
 
 from bs4 import BeautifulSoup
 from docx import Document
@@ -1989,10 +1988,6 @@ def detect_case_numbers(text: str) -> list[int]:
 
 @st.cache_resource(show_spinner=False)
 
-def _median_or_default(xs, default=12.0):
-    xs = [x for x in xs if isinstance(x, (int, float))]
-    return stats.median(xs) if xs else default
-
 def _dehyphenate_join(prev: str, curr: str) -> str:
     """
     Join two line fragments, removing soft hyphenation like: "disclo-" + "sure" -> "disclosure".
@@ -2019,29 +2014,6 @@ def reset_chat():
     # optional: also clear the draft:
     # st.session_state["chat_draft"] = ""
     st.rerun()  # ensure immediate re-render
-
-def clear_last_exchange():
-    """
-    Removes the last assistant message and, if present, the immediately preceding user message.
-    Useful if the last answer was off-topic or leaked style.
-    """
-    hist = list(st.session_state.get("chat_history", []))
-    if not hist:
-        return
-    # Pop trailing whitespace/system noise if any (defensive)
-    while hist and hist[-1].get("role") not in ("user", "assistant"):
-        hist.pop()
-
-    # Remove last assistant message (if any)
-    if hist and hist[-1].get("role") == "assistant":
-        hist.pop()
-
-    # Remove the preceding user question (if any)
-    if hist and hist[-1].get("role") == "user":
-        hist.pop()
-
-    st.session_state["chat_history"] = hist
-    st.rerun()
 
 # ---------------- UI ----------------
 st.set_page_config(

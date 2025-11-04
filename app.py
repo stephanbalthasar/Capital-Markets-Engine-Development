@@ -18,12 +18,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.feature_extraction.text import TfidfVectorizer
 import requests
 from bs4 import BeautifulSoup
-
-#--------------------- CONSTANTS ---------------
 BOOKLET = "assets/EUCapML - Course Booklet.docx"
-MANUAL_MIN_SIM = 0.40        # raise if you want only very tight matches (e.g., 0.42–0.45)
-MANUAL_MAX_CHUNKS = 25       # global cap for booklet chunks kept
-MANUAL_MIN_KW_HITS = 2       # you can try 3 if you want even stricter coverage
 
 # ---------------- Build fingerprint (to verify latest deployment) ----------------
 APP_HASH = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:10]
@@ -1528,237 +1523,118 @@ def manual_chunk_relevant(text: str, extracted_keywords: list[str], user_query: 
     tgt = text.lower()
     return any(k in tgt for k in (keys + q_terms))
 
-# --- Precise legal tag extraction from a chunk (anchors) ---
-def _extract_chunk_anchors(text: str) -> Dict[str, set]:
-    """
-    Extracts legal anchors from a chunk:
-    - law acronyms (MAR, PR, MiFID II, TD, WpHG, WpÜG)
-    - Article refs (Art/Article 17(4), 6(1), etc.)
-    - Paragraph refs (§ 33, § 34(2), etc.)
-    Returns sets and also "combined" anchors like "art 17(4) mar".
-    """
-    t = text or ""
-    acr = set(re.findall(r"\b(MAR|PR|MiFID II|TD|WpHG|WpÜG)\b", t, flags=re.I))
-    arts = set(re.findall(r"(?i)\b(Art\.?|Article)\s*\d+(?:\([^)]+\))*", t))
-    pars = set(re.findall(r"§\s*\d+[a-z]?(?:\([^)]+\))*", t))
-    # Normalise casing & whitespace
-    norm = lambda s: re.sub(r"\s+", " ", s.strip().lower()).replace("art.", "art")
-    acr_n = {norm(a) for a in acr}
-    art_n = {norm(a) for a in arts}
-    par_n = {norm(p) for p in pars}
-
-    # Build combined anchors inside the same chunk (e.g., "art 17(4) mar")
-    combined = set()
-    for a in art_n:
-        for law in acr_n:
-            combined.add(f"{a} {law}")
-    # Paragraphs combine only with WpHG/WpÜG (German law)
-    for p in par_n:
-        for law in ("wphg", "wpüg"):
-            if law in acr_n:
-                combined.add(f"{p} {law}")
-
-    return {
-        "acronyms": acr_n,
-        "articles": art_n,
-        "paragraphs": par_n,
-        "combined": combined,
-        "all": acr_n | art_n | par_n | combined,
-    }
-
-def _normalise_model_anchors(model_answer_slice: str) -> Dict[str, set]:
-    """
-    Reuse your existing _anchors_from_model but also normalise for matching.
-    We produce two sets:
-    - 'strict' : combined anchors like "art 17(4) mar" or "§ 33 wphg"
-    - 'loose'  : standalone acronyms / bare articles / bare paragraphs
-    """
-    raw = _anchors_from_model(model_answer_slice) or []
-    # Split into classes
-    acr = set([a for a in raw if re.fullmatch(r"[A-ZÄÖÜ]{2,6}", a)])
-    arts = set([a for a in raw if re.search(r"(?i)\bart|article\b", a)])
-    pars = set([a for a in raw if re.search(r"§\s*\d", a)])
-    # normalise
-    norm = lambda s: re.sub(r"\s+", " ", s.strip().lower()).replace("art.", "art")
-    acr_n = {norm(a) for a in acr}
-    art_n = {norm(a) for a in arts}
-    par_n = {norm(p) for p in pars}
-    # combined strict
-    strict = set()
-    for a in art_n:
-        for law in acr_n:
-            strict.add(f"{a} {law}")
-    for p in par_n:
-        for law in ("wphg", "wpüg"):
-            if law in acr_n:
-                strict.add(f"{p} {law}")
-    loose = acr_n | art_n | par_n
-    return {"strict": strict, "loose": loose}
-
-def _keyword_hits(text: str, keywords: list[str]) -> int:
-    return sum(1 for kw in keywords if keyword_present(text, kw))
-
-def _chunk_density(anchor_hits: int, kw_hits: int, words: int) -> float:
-    return (anchor_hits + kw_hits) / max(1, words / 100.0)
-
-def _manual_gate_and_score(chunk_text: str,
-                           chunk_anchors: Dict[str, set],
-                           model_anchors: Dict[str, set],
-                           kw_list: list[str],
-                           qvec, cvec,
-                           min_sim: float = MANUAL_MIN_SIM,
-                           min_kw_hits: int = MANUAL_MIN_KW_HITS) -> tuple[bool, float, dict]:
-    """
-    Gate:
-      - at least 1 'strict' anchor overlap (combined Art/§ + law) or fallback (art/§ + matching law acronym),
-      - at least `min_kw_hits` distinct keyword hits,
-      - similarity >= `min_sim`.
-    Score:
-      0.60*sim + 0.25*anchor_score + 0.15*density  (density favors concise, on-point chunks)
-    """
-    sim = float(cosine_similarity(qvec.reshape(1, -1), cvec.reshape(1, -1))[0, 0])
-    words = len((chunk_text or "").split())
-
-    strict_hits = len(chunk_anchors["combined"] & model_anchors["strict"])
-    if strict_hits == 0:
-        # fallback: art/§ present AND a law acronym present in both model and chunk
-        law_overlap = chunk_anchors["acronyms"] & (model_anchors["loose"])
-        art_or_par = (chunk_anchors["articles"] | chunk_anchors["paragraphs"])
-        if law_overlap and art_or_par:
-            strict_hits = 1
-
-    kw_hits = _keyword_hits(chunk_text, kw_list)
-    density = _chunk_density(strict_hits, kw_hits, words)
-
-    keep = (strict_hits >= 1) and (kw_hits >= min_kw_hits) and (sim >= min_sim)
-    anchor_score = min(2, strict_hits) / 2.0  # 0..1
-    score = 0.60*sim + 0.25*anchor_score + 0.15*min(4.0, density)/4.0
-
-    diag = {"sim": sim, "strict_hits": strict_hits, "kw_hits": kw_hits,
-            "density": density, "score": score, "words": words}
-    return keep, score, diag
-
-@st.cache_resource(show_spinner=False)
-def _build_manual_index(docx_source: str, encoder_key: str, _backend):
-    chunks, metas = extract_manual_chunks_with_refs(docx_source, chunk_words_hint=None)
-    embs = embed_texts(chunks, _backend) if chunks else np.zeros((0, 384))
-    tags = [_extract_chunk_anchors(ch) for ch in chunks]
-    return chunks, metas, embs, tags
 
 def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend,
                                   extracted_keywords, user_query: str = "",
                                   top_k_pages=8, chunk_words=170):
-
-    # --- Build/Load booklet index (cached) ---
-    # Build/Load booklet index (cached) — uses encoder_key (hashable) and ignores _backend in cache key
-    backend_kind = backend[0]  # "sbert" or "tfidf"
+    manual_chunks, manual_metas = [], []
     try:
-        booklet_mtime = os.path.getmtime(BOOKLET)
-    except OSError:
-        booklet_mtime = 0
-    encoder_key = f"{backend_kind}:{APP_HASH}:{booklet_mtime}"
+        manual_chunks, manual_metas = extract_manual_chunks_with_refs(
+            BOOKLET,
+            chunk_words_hint=None
+        )        
+    except Exception as e:
+        st.warning(f"Could not load course manual: {e}")
+    try:
+        _model_anchors = _anchors_from_model(model_answer_filtered)
+    except Exception as _e:
+        _model_anchors = []
+
+    if _model_anchors:
+        alow = [a.lower() for a in _model_anchors]
+        mc2, mm2 = [], []
+        for ch, meta in zip(manual_chunks, manual_metas):
+            txt = (ch or "").lower()
+            if any(a in txt for a in alow):
+                mc2.append(ch)
+                mm2.append(meta)
+        if mc2:  # shrink only if something kept
+            manual_chunks, manual_metas = mc2, mm2
+
+    # (keep the rest unchanged)
+
+    # ✅ Filter manual chunks using keywords + the user's query AND case numbers, if any
+    selected_q = st.session_state.get("selected_question", "Question 1")
+    uq_cases = detect_case_numbers(user_query or "")
+    filtered_chunks, filtered_metas = [], []
+    for ch, m in zip(manual_chunks, manual_metas):
+        has_kw = manual_chunk_relevant(ch, extracted_keywords, user_query)
+        case_match = bool(uq_cases and set(uq_cases).intersection(set(m.get("cases") or [])))
+        if has_kw or case_match:
+            filtered_chunks.append(ch)
+            filtered_metas.append(m)
+    if filtered_chunks:
+        manual_chunks, manual_metas = filtered_chunks, filtered_metas
     
-    try:
-        manual_chunks_all, manual_metas_all, manual_embs_all, manual_tags_all = _build_manual_index(
-            BOOKLET, encoder_key, backend
-        )
-    except Exception as e:
-        st.warning(f"Could not load course manual: {e}")
-        manual_chunks_all, manual_metas_all, manual_embs_all, manual_tags_all = [], [], None, []
-    try:
-        manual_chunks_all, manual_metas_all, manual_embs_all, manual_tags_all = _build_manual_index(BOOKLET, backend)
-    except Exception as e:
-        st.warning(f"Could not load course manual: {e}")
-        manual_chunks_all, manual_metas_all, manual_embs_all, manual_tags_all = [], [], None, []
-
-    # Normalised anchors from the (question-specific) MODEL ANSWER slice
-    model_anchors = _normalise_model_anchors(model_answer_filtered)
-
-    # Query vector for booklet gating = filtered model answer (tight focus)
-    q_text = model_answer_filtered.strip()
-    qvec = embed_texts([q_text], backend)[0] if q_text else None
-
-    # --- Strict gate + global top-N selection for manual chunks ---
-    kept_manual = []
-    if manual_chunks_all and qvec is not None:
-        for i, (ch, meta, cvec, tags) in enumerate(zip(manual_chunks_all, manual_metas_all, manual_embs_all, manual_tags_all)):
-            keep, score, diag = _manual_gate_and_score(
-                ch, tags, model_anchors, extracted_keywords, qvec, cvec,
-                min_sim=MANUAL_MIN_SIM, min_kw_hits=MANUAL_MIN_KW_HITS
-            )
-            if keep:
-                kept_manual.append((i, score, diag))
-
-    # Sort by score desc and keep the top MANUAL_MAX_CHUNKS globally (no per-page throttling)
-    kept_manual_sorted = sorted(kept_manual, key=lambda t: -t[1])[:MANUAL_MAX_CHUNKS]
-
-    # Prepare manual meta tuples
-    manual_chunks, manual_meta = [], []
-    for i, score, diag in kept_manual_sorted:
-        meta = manual_metas_all[i]
-        page_key = -(meta["page_num"])                 # keep existing grouping key (page), but we don't restrict per page
-        citation = format_manual_citation(meta)        # e.g., "see Course Booklet para. 27"
-        manual_chunks.append(manual_chunks_all[i])
+    # ---- Prepare manual meta tuples with a unique key per *page* so we can group snippets by page
+    manual_meta = []
+    for m in manual_metas:
+        page_key = -(m["page_num"])  
+        citation = format_manual_citation(m)  # pre-format a nice line
+        # We store citation in 'title' so we can reuse downstream without new structures
         manual_meta.append((page_key, "manual://course-booklet", citation))
 
-    # --- Web chunking (unchanged) ---
+    # ---- Prepare web chunks (unchanged)
+    # ---- Prepare web chunks (fixed: keep meta 1:1 with chunks)
     web_chunks, web_meta = [], []
+    selected_q = st.session_state.get("selected_question", "Question 1")
     for i, p in enumerate(pages):
         text = p.get("text", "")
         if not text:
             continue
+    # Optional relevance filter (keep if you added MANUAL_KEY_TERMS):
         if 'web_page_relevant' in globals() and not web_page_relevant(text, extracted_keywords):
             continue
+
         chunks_i = split_into_chunks(text, max_words=chunk_words)
         for ch in chunks_i:
             web_chunks.append(ch)
-            web_meta.append((i + 1, p["url"], p["title"]))
+            web_meta.append((i + 1, p["url"], p["title"]))  # append meta PER CHUNK
 
-    # --- Combine & rank all chunks ---
+    # ---- Build combined corpus
     all_chunks = manual_chunks + web_chunks
-    all_meta = manual_meta + web_meta
+    all_meta   = manual_meta   + web_meta
+    # Defensive: keep chunks and meta in lockstep
     if len(all_chunks) != len(all_meta):
         m = min(len(all_chunks), len(all_meta))
-        all_chunks, all_meta = all_chunks[:m], all_meta[:m]
+        all_chunks = all_chunks[:m]
+        all_meta   = all_meta[:m]
 
-    # Final query = user question (if any) + model slice (so chat still influences ranking)
-    query = "\n\n".join([s for s in [user_query, model_answer_filtered] if s])
+    # Query vector built from student + model slice
+    query = "\n\n".join([s for s in [user_query, student_answer, model_answer_filtered] if s])
     embs = embed_texts([query] + all_chunks, backend)
     qv, cvs = embs[0], embs[1:]
     sims = [cos_sim(qv, v) for v in cvs]
-
-    # Slightly higher floor overall if you want tighter results across manual+web
-    MIN_SIM_ALL = 0.25  # you can raise to 0.30; booklet chunks already passed a stricter gate
     idx = np.argsort(sims)[::-1]
 
+    # ✅ Similarity floor to keep only reasonably relevant snippets
+    MIN_SIM = 0.22  # tune if needed
+
+    # ---- Select top snippets grouped by (manual page) or (web page index)
     per_page = {}
     for j in idx:
-        if sims[j] < MIN_SIM_ALL:
+        if sims[j] < MIN_SIM:
             break
         pi, url, title = all_meta[j]
         snip = all_chunks[j]
         arr = per_page.setdefault(pi, {"url": url, "title": title, "snippets": []})
-        if len(arr["snippets"]) < 3:      # keep as-is; raise if you want more per page
+        if len(arr["snippets"]) < 3:
             arr["snippets"].append(snip)
-        if len(per_page) >= top_k_pages:  # UI limit for pages shown
+        if len(per_page) >= top_k_pages:
             break
 
+    # Order by key and build source lines. For manual items we already have 'title' as a full citation line.
     top_pages = [per_page[k] for k in sorted(per_page.keys())][:top_k_pages]
+
     source_lines = []
     for i, tp in enumerate(top_pages):
         if tp["url"].startswith("manual://"):
+            # already a fully formatted citation like: "Course Booklet — p. ii (PDF p. 4), para. 115"
             source_lines.append(f"[{i+1}] {tp['title']}")
         else:
             source_lines.append(f"[{i+1}] {tp['title']} — {tp['url']}")
 
-    # Optional: diagnostics in sidebar
-    if st.sidebar.checkbox("Show booklet relevance debugging", value=False):
-        st.caption(f"Booklet chunks kept (global top {MANUAL_MAX_CHUNKS}), threshold={MANUAL_MIN_SIM}")
-        for (i, score, diag) in kept_manual_sorted[:50]:
-            meta = manual_metas_all[i]
-            label = meta.get("paras") or meta.get("cases") or ["—"]
-            st.write(f"{label} | score={diag['score']:.3f} sim={diag['sim']:.3f} "
-                     f"anchors={diag['strict_hits']} kw={diag['kw_hits']} dens={diag['density']:.2f}")
+    return top_pages, source_lines
 
 # ---------------- LLM via Groq (free) ----------------
 def call_groq(messages: List[Dict], api_key: str, model_name: str = "llama-3.1-8b-instant",

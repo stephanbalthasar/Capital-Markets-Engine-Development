@@ -19,8 +19,6 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 import requests
 from bs4 import BeautifulSoup
 BOOKLET = "assets/EUCapML - Course Booklet.docx"
-import time
-
 
 # ---------------- Build fingerprint (to verify latest deployment) ----------------
 APP_HASH = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:10]
@@ -372,10 +370,6 @@ def load_booklet_anchors(docx_source: Union[str, IO[bytes]]) -> Tuple[List[Dict[
 ## ---------------------------------------------------------------------------------------------
 
 # ---------- Public helpers you will call from the app ----------
-def throttle_groq(delay_seconds: float = 1):
-    """Sleep for a fixed delay to throttle Groq API calls."""
-    time.sleep(delay_seconds)
-
 def add_good_catch_for_optionals(reply: str, rubric: dict) -> str:
     import re
     bonus = rubric.get("bonus") or []
@@ -861,7 +855,7 @@ def extract_issues_from_model_answer(model_answer: str, llm_api_key: str) -> lis
         {"role": "user", "content": user},
     ]
 
-    raw = call_groq(messages, api_key=llm_api_key, model_name="llama-3.1-8b-instant", temperature=0.0, max_tokens=700)
+    raw = call_groq(messages, api_key=llm_api_key, model_name="llama-3.1-8b-instant", temperature=0.0, max_tokens=900)
     parsed = _try_parse_json(raw)
     issues = _coerce_issues(parsed)
     primary = derive_primary_scope(model_answer)
@@ -1523,20 +1517,12 @@ def collect_corpus(student_answer: str, extra_user_q: str, max_fetch: int = 20) 
     return fetched
 
 # ---- Manual relevance terms per question ----
-def llm_chunk_relevant(chunk_text: str, model_answer_slice: str, api_key: str) -> bool:
-    reply = call_groq(
-        messages=[
-            {"role": "system", "content": "You are a legal tutor. Decide if the following chunk is relevant to the model answer."},
-            {"role": "user", "content": f"MODEL ANSWER:\n{model_answer_slice}\n\nCHUNK:\n{chunk_text}\n\nIs this chunk relevant? Reply 'Yes' or 'No'."}
-        ],
-        api_key=api_key,
-        model_name="llama-3.1-8b-instant",
-        temperature=0.0,
-        max_tokens=20
-    )
-    if not reply:
-        return False  # or True, depending on your fallback preference
-    return reply.strip().lower().startswith("yes")
+def manual_chunk_relevant(text: str, extracted_keywords: list[str], user_query: str = "") -> bool:
+    q_terms = [w.lower() for w in re.findall(r"[A-Za-zÄÖÜäöüß0-9\-]{3,}", user_query or "")]
+    keys = [k.lower() for k in (extracted_keywords or [])]
+    tgt = text.lower()
+    return any(k in tgt for k in (keys + q_terms))
+
 
 def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, backend,
                                   extracted_keywords, user_query: str = "",
@@ -1565,23 +1551,20 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
         if mc2:  # shrink only if something kept
             manual_chunks, manual_metas = mc2, mm2
 
-    # ⚡ FAST booklet filtering: keep only the top‑N manual chunks by cosine similarity
-    # to the MODEL ANSWER slice. This avoids calling the LLM per chunk.
-    TOP_N_MANUAL = 12  # tune 8–20 if you want more/less booklet context
+    # (keep the rest unchanged)
 
-    if manual_chunks:
-        try:
-            # Reuse your local embedder (SBERT or TF‑IDF fallback)
-            embs = embed_texts([model_answer_filtered] + manual_chunks, backend)
-            qv, cvs = embs[0], embs[1:]
-            sims = [cos_sim(qv, v) for v in cvs]
-
-            keep_idx = sorted(range(len(sims)), key=lambda i: sims[i], reverse=True)[:TOP_N_MANUAL]
-            manual_chunks = [manual_chunks[i] for i in keep_idx]
-            manual_metas  = [manual_metas[i]  for i in keep_idx]
-        except Exception as e:
-            # Fail safe: if embeddings fail for any reason, keep the original chunks.
-            st.info(f"Booklet fast-filter fallback (kept all): {e}")
+    # ✅ Filter manual chunks using keywords + the user's query AND case numbers, if any
+    selected_q = st.session_state.get("selected_question", "Question 1")
+    uq_cases = detect_case_numbers(user_query or "")
+    filtered_chunks, filtered_metas = [], []
+    for ch, m in zip(manual_chunks, manual_metas):
+        has_kw = manual_chunk_relevant(ch, extracted_keywords, user_query)
+        case_match = bool(uq_cases and set(uq_cases).intersection(set(m.get("cases") or [])))
+        if has_kw or case_match:
+            filtered_chunks.append(ch)
+            filtered_metas.append(m)
+    if filtered_chunks:
+        manual_chunks, manual_metas = filtered_chunks, filtered_metas
     
     # ---- Prepare manual meta tuples with a unique key per *page* so we can group snippets by page
     manual_meta = []
@@ -1654,35 +1637,28 @@ def retrieve_snippets_with_manual(student_answer, model_answer_filtered, pages, 
     return top_pages, source_lines
 
 # ---------------- LLM via Groq (free) ----------------
-def call_groq(messages: List[Dict], api_key: str, model_name: str = "llama-3.1-8b-instant", temperature: float = 0.2, max_tokens: int = 700) -> str:
+def call_groq(messages: List[Dict], api_key: str, model_name: str = "llama-3.1-8b-instant",
+              temperature: float = 0.2, max_tokens: int = 700) -> str:
     """
     Groq OpenAI-compatible chat endpoint. Models like llama-3.1-8b-instant / 70b-instant are free.
     """
-    throttle_groq()
-
     if not api_key:
         st.error("No GROQ_API_KEY found (add it to Streamlit Secrets).")
         return None
-
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     data = {
         "model": model_name,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-
     try:
         r = requests.post(url, headers=headers, json=data, timeout=90)
         if r.status_code != 200:
-            try:
-                body = r.json()
-            except Exception:
-                body = r.text
+            # Show exact error so it's easy to fix
+            try: body = r.json()
+            except Exception: body = r.text
             st.error(f"Groq error {r.status_code}: {body}")
             return None
         return r.json()["choices"][0]["message"]["content"]
@@ -2307,8 +2283,8 @@ with colA:
             st.markdown("### 🧭 Narrative Feedback")
             if api_key:
                 # Trim large blocks *before* building the prompt
-                sources_block = truncate_block(sources_block, 800)
-                excerpts_block = truncate_block(excerpts_block, 1800)
+                sources_block = truncate_block(sources_block, 1200)
+                excerpts_block = truncate_block(excerpts_block, 3200)
             
                 # Hard rule included here with correct quoting (no stray backslash)
                 hard_rule = (

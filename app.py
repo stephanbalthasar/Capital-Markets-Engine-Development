@@ -4,28 +4,37 @@
 # - Web retrieval from EUR-Lex, CURIA, ESMA, BaFin, Gesetze-im-Internet
 # - Hidden model answer is authoritative; citations [1], [2] map to sources
 
-import os
-import re
-import json
 import hashlib
-import pathlib
-from typing import List, Dict, Tuple
-from urllib.parse import quote_plus, urlparse
+import json
+import math
 import numpy as np
+import os
+import pathlib
+import re
+import requests
 import streamlit as st
 import statistics as stats
+
+from bs4 import BeautifulSoup
+from docx import Document
+from docx import Document
+from docx.text.paragraph import Paragraph
+from docx.table import Table, _Cell
+from docx.oxml.text.paragraph import CT_P
+from docx.oxml.table import CT_Tbl
+from docx.document import Document as _Document
+from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.feature_extraction.text import TfidfVectorizer
-import requests
-from bs4 import BeautifulSoup
+from typing import List, Dict, Any, Tuple, Union, IO
+from urllib.parse import quote_plus, urlparse
+
 BOOKLET = "assets/EUCapML - Course Booklet.docx"
 
 # ---------------- Build fingerprint (to verify latest deployment) ----------------
 APP_HASH = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:10]
 
 # --------------------------- WORD-ONLY PARSER + CITATIONS ---------------------------
-from typing import List, Dict, Any, Tuple, Union, IO
-from docx import Document
 
 # --- Compact citation formatter (no PDF assumptions) ---
 def format_booklet_citation(meta: Dict[str, Any]) -> str:
@@ -46,13 +55,6 @@ def format_booklet_citation(meta: Dict[str, Any]) -> str:
     return "see Course Booklet"
 
 # --- Word-based parser: extracts numbered paragraphs and case sections ---
-from typing import List, Dict, Any, Tuple, Union, IO
-from docx import Document
-from docx.text.paragraph import Paragraph
-from docx.table import Table, _Cell
-from docx.oxml.text.paragraph import CT_P
-from docx.oxml.table import CT_Tbl
-from docx.document import Document as _Document
 
 PARA_RE_DOTSAFE = re.compile(r"^(\d{1,4})\b(?!\.)")              # 12 but not 1.1
 CASE_RE = re.compile(r"^Case\s*Study\s*(\d{1,4})\b", re.I)
@@ -332,9 +334,6 @@ def extract_booklet_chunks_with_refs(docx_source: Union[str, IO[bytes]],
     return parse_booklet_docx(docx_source)
 
 # --- Cached loader for parsed anchors (Word) ---
-import math
-from typing import Union, IO, Any, List, Dict, Tuple
-
 @st.cache_data(show_spinner=False)
 def load_booklet_anchors(docx_source: Union[str, IO[bytes]]) -> Tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]]]:
     """
@@ -512,7 +511,6 @@ def load_embedder():
     Try a small sentence-transformer; if unavailable (e.g., install timeouts), fall back to TF-IDF.
     """
     try:
-        from sentence_transformers import SentenceTransformer
         model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
         return ("sbert", model)
     except Exception:
@@ -579,7 +577,6 @@ c)  Failure to disclose under § 33 WpHG/§ 35 WpÜG will suspend Unicorn’s sh
 """
 
 # ---------------- Scoring Rubric ----------------
-import json
 
 # ---------- Helpers for robust JSON extraction ----------
 def _first_json_block(s: str):
@@ -754,9 +751,6 @@ def _auto_issues_from_text(text: str, max_issues: int = 8) -> list[dict]:
 
     return issues
 # ---------- Main extractor (no hard-coded topics) ----------
-from sklearn.feature_extraction.text import TfidfVectorizer
-import numpy as np
-
 def improved_keyword_extraction(text: str, max_keywords: int = 20) -> list[str]:
     if not text:
         return []
@@ -2050,9 +2044,6 @@ def clear_last_exchange():
     st.rerun()
 
 # ---------------- UI ----------------
-import streamlit as st
-import os
-
 st.set_page_config(
     page_title="EUCapML Case Tutor", 
     page_icon="⚖️", 

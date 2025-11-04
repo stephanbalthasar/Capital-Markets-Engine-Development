@@ -24,7 +24,6 @@ BOOKLET = "assets/EUCapML - Course Booklet.docx"
 APP_HASH = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:10]
 
 # --------------------------- WORD-ONLY PARSER + CITATIONS ---------------------------
-import re
 from typing import List, Dict, Any, Tuple, Union, IO
 from docx import Document
 
@@ -47,7 +46,6 @@ def format_booklet_citation(meta: Dict[str, Any]) -> str:
     return "see Course Booklet"
 
 # --- Word-based parser: extracts numbered paragraphs and case sections ---
-import re
 from typing import List, Dict, Any, Tuple, Union, IO
 from docx import Document
 from docx.text.paragraph import Paragraph
@@ -371,7 +369,6 @@ def load_booklet_anchors(docx_source: Union[str, IO[bytes]]) -> Tuple[List[Dict[
 
 # ---------- Public helpers you will call from the app ----------
 def add_good_catch_for_optionals(reply: str, rubric: dict) -> str:
-    import re
     bonus = rubric.get("bonus") or []
     if not reply or not bonus:
         return reply
@@ -395,7 +392,6 @@ def derive_primary_scope(model_answer_slice: str, top_k: int = 2) -> set[str]:
     Uses boundary-aware counts and penalizes regimes that are explicitly marked
     "not expected / not required / outside scope". Generic and scalable.
     """
-    import re
     text = (model_answer_slice or "")
 
     # Boundary-aware patterns; include common aliases. Extendable over time.
@@ -430,8 +426,7 @@ def bold_section_headings(reply: str) -> str:
     """
     if not reply:
         return reply
-    import re
-
+    
     # 1) Canonicalise a few heading variants (defensive)
     reply = re.sub(r"(?im)^\s*CLAIMS\s*:\s*$", "Student's Core Claims:", reply)
     
@@ -479,7 +474,6 @@ def prune_redundant_improvements(student_answer: str, reply: str) -> str:
     """
     if not reply:
         return reply
-    import re
     anchors = [
         r"\bLafonta\b",
         r"\bArt(?:icle)?\s*7\s*\(\s*2\s*\)\b",
@@ -760,7 +754,6 @@ def _auto_issues_from_text(text: str, max_issues: int = 8) -> list[dict]:
 
     return issues
 # ---------- Main extractor (no hard-coded topics) ----------
-import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 import numpy as np
 
@@ -987,16 +980,12 @@ def canonicalize(s: str, strip_paren_numbers: bool = False) -> str:
     s = re.sub(r"[^a-z0-9§]", "", s)
     return s
 
-import re
-
-
 def keyword_present(answer: str, kw: str) -> bool:
     """
     Detects presence of compound legal references like 'article 17(4)(a) MAR' or '§ 33 WpHG'
     even if the student mentions the article/paragraph and the law name separately.
     """
-    import re
-
+    
     def canonicalize(s: str) -> str:
         s = s.lower()
         s = s.replace("art.", "art").replace("article", "art").replace("–", "-")
@@ -1071,7 +1060,6 @@ def _find_section(text: str, title_regex: str):
     Return (head, body, tail, span) for the section whose title matches title_regex.
     If not found, returns (None, None, None, None).
     """
-    import re
     m = re.search(
         rf"({title_regex}\s*)(.*?)(\n(?:Student's Core Claims:|Mistakes:|Missing Aspects:|Suggestions:|Conclusion|📚|Sources used|$))",
         text,
@@ -1085,7 +1073,6 @@ def _neutralise_error_tone(line: str) -> str:
     """
     Turn blamey phrasing into 'suggestion' tone.
     """
-    import re
     s = line
     s = re.sub(r"\b[Tt]he student incorrectly (states|assumes|concludes)\b", "Consider also", s)
     s = re.sub(r"\b[Tt]his is incorrect because\b", "Rationale:", s)
@@ -1129,7 +1116,6 @@ def merge_to_suggestions(reply: str, student_answer: str, activate: bool = True)
     tmp = "".join(parts)
 
     # 4) Insert Suggestions before Conclusion
-    import re
     suggestions_block = ""
     if suggestions:
         suggestions_block = "Suggestions:\n" + "\n".join(suggestions) + "\n\n"
@@ -1147,7 +1133,6 @@ def tidy_empty_sections(reply: str) -> str:
     """
     if not reply:
         return reply
-    import re
     # Remove empty sections like 'Missing Aspects:' followed by '—' or blank lines
     reply = re.sub(r"(Missing Aspects:\s*)(?:—\s*|\s*)(?=\n(?:Conclusion|📚|Sources used|$))",
                    "", reply, flags=re.S | re.I)
@@ -1214,8 +1199,7 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
     - Conclusion
     Each section is formatted with bullet points and explanations where needed.
     """
-    import re
-
+    
     if not reply:
         return reply
 
@@ -2068,7 +2052,6 @@ def clear_last_exchange():
 # ---------------- UI ----------------
 import streamlit as st
 import os
-import requests
 
 st.set_page_config(
     page_title="EUCapML Case Tutor", 

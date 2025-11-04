@@ -1517,20 +1517,12 @@ def collect_corpus(student_answer: str, extra_user_q: str, max_fetch: int = 20) 
     return fetched
 
 # ---- Booklet relevance terms per question ----
-def booklet_chunk_relevant(text: str, extracted_keywords: list[str], user_query: str = "", min_hits: int = 2) -> bool:
-    tgt = (text or "").lower()
-    # tokens from query (>=3 chars)
+def booklet_chunk_relevant(text: str, extracted_keywords: list[str], user_query: str = "") -> bool:
     q_terms = [w.lower() for w in re.findall(r"[A-Za-zÄÖÜäöüß0-9\-]{3,}", user_query or "")]
-    keys = [k.lower() for k in (extracted_keywords or [])] + q_terms
-    hits = 0
-    for k in keys:
-        # word-boundary match when possible; fall back to substring for articles/§
-        pat = r"\b" + re.escape(k) + r"\b" if re.match(r"^[A-Za-z0-9\-]+$", k) else re.escape(k)
-        if re.search(pat, tgt):
-            hits += 1
-            if hits >= min_hits:
-                return True
-    return False
+    keys = [k.lower() for k in (extracted_keywords or [])]
+    tgt = text.lower()
+    return any(k in tgt for k in (keys + q_terms))
+
 
 def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages, backend,
                                   extracted_keywords, user_query: str = "",
@@ -1616,7 +1608,7 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
     idx = np.argsort(sims)[::-1]
 
     # ✅ Similarity floor to keep only reasonably relevant snippets
-    MIN_SIM = 0.35  # tune if needed
+    MIN_SIM = 0.22  # tune if needed
 
     # ---- Select top snippets grouped by (booklet page) or (web page index)
     per_page = {}

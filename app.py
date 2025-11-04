@@ -363,14 +363,6 @@ def load_booklet_anchors(docx_source: Union[str, IO[bytes]]) -> Tuple[List[Dict[
 ## ---------------------------------------------------------------------------------------------
 
 # ---------- Public helpers you will call from the app ----------
-def extract_excluded_keywords(text: str) -> set[str]:
-    exclusion_contexts = r"(not required|not relevant|not expected|outside scope|does not apply|excluded)"
-    keyword_pattern = r"(§\s*\d+[a-z]?(?:\s*\(\d+\))?\s*\w*|article\s*\d+(?:\(\d+\))?(?:\(\w+\))?\s*\w*)"
-    excluded = set()
-    for match in re.finditer(rf"{keyword_pattern}.*?{exclusion_contexts}", text, flags=re.I):
-        excluded.add(match.group(1).strip().lower())
-    return excluded  
-
 def add_good_catch_for_optionals(reply: str, rubric: dict) -> str:
     bonus = rubric.get("bonus") or []
     if not reply or not bonus:
@@ -927,19 +919,7 @@ def generate_rubric_from_model_answer(student_answer: str, model_answer: str, ba
         missed = [kw for kw in row["keywords_total"] if not keyword_present(student_answer, kw)]
         if missed:
             missing.append({"issue": row["issue"], "missed_keywords": missed})
-    excluded_keywords = extract_excluded_keywords(model_answer)
-    excluded_set = {
-        str(kw).lower().strip()
-        for kw in excluded_keywords or []
-        if isinstance(kw, str) or isinstance(kw, int)
-    }
-    excluded_set = {kw.lower().strip() for kw in excluded_keywords}
 
-    missing = [
-        m for m in missing
-        if not any(kw.lower().strip() in excluded_set for kw in m.get("missed_keywords", []))
-    ]
-    
     substantive_flags = detect_substantive_flags(student_answer)
 
     return {

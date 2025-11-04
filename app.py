@@ -125,9 +125,6 @@ def _paragraph_anchor_number(p: Paragraph) -> int | None:
     if m and _run_is_bold(r):
         return int(m.group(1))
     # Fallback: a plain-text line starting with digits not followed by '.' and not a heading
-    m2 = PARA_RE_DOTSAFE.match((p.text or "").strip())
-    if m2 and _run_is_bold(r):
-        return int(m2.group(1))
     return None
 
 def _cell_text(cell: _Cell) -> str:

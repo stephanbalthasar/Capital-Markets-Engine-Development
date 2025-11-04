@@ -931,6 +931,11 @@ def generate_rubric_from_model_answer(student_answer: str, model_answer: str, ba
         if missed:
             missing.append({"issue": row["issue"], "missed_keywords": missed})
     excluded_keywords = extract_excluded_keywords(model_answer)
+    excluded_set = {
+        str(kw).lower().strip()
+        for kw in excluded_keywords or []
+        if isinstance(kw, str) or isinstance(kw, int)
+    }
     excluded_set = {kw.lower().strip() for kw in excluded_keywords}
 
     missing = [

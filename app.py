@@ -1591,7 +1591,7 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
         pi, url, title = all_meta[j]
         snip = all_chunks[j]
         arr = per_page.setdefault(pi, {"url": url, "title": title, "snippets": []})
-        if len(arr["snippets"]) < 6:
+        if len(arr["snippets"]) < 4:
             arr["snippets"].append(snip)
         if len(per_page) >= top_k_pages:
             break

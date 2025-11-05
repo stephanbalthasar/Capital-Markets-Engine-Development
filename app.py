@@ -54,6 +54,7 @@ def format_booklet_citation(meta: Dict[str, Any]) -> str:
 
 # --- Word-based parser: extracts numbered paragraphs and case sections ---
 
+PARA_RE_DOTSAFE = re.compile(r"^(\d{1,4})\b(?!\.)")              # 12 but not 1.1
 CASE_RE = re.compile(r"^Case\s*Study\s*(\d{1,4})\b", re.I)
 
 def _iter_block_items(parent):
@@ -955,6 +956,19 @@ def filter_model_answer_and_rubric(selected_question: str, model_answer: str, ap
     return model_answer_filtered, extracted_issues
     
 # ---------------- Robust keyword & citation checks ----------------
+def normalize_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
+
+def canonicalize(s: str, strip_paren_numbers: bool = False) -> str:
+    s = s.lower()
+    s = s.replace("art.", "art").replace("article", "art").replace("–", "-")
+    s = s.replace("wpüg", "wpüg")
+    s = re.sub(r"\s+", "", s)
+    if strip_paren_numbers:
+        s = re.sub(r"\(\d+[a-z]?\)", "", s)
+    s = re.sub(r"[^a-z0-9§]", "", s)
+    return s
+
 def keyword_present(answer: str, kw: str) -> bool:
     """
     Detects presence of compound legal references like 'article 17(4)(a) MAR' or '§ 33 WpHG'
@@ -1335,6 +1349,41 @@ def enforce_model_consistency(reply: str, model_answer_filtered: str, api_key: s
     recheck = check_reply_vs_model_for_contradictions(model_answer_filtered, corrected, api_key, model_name)
     return corrected if recheck.get("consistent", True) else corrected
 
+def summarize_rubric(student_answer: str, model_answer: str, backend, required_issues: List[Dict], weights: Dict):
+    embs = embed_texts([student_answer, model_answer], backend)
+    sim = cos_sim(embs[0], embs[1])
+    sim_pct = max(0.0, min(100.0, 100.0 * (sim + 1) / 2))
+
+    per_issue, tot, got = [], 0, 0
+    for issue in required_issues:
+        pts = issue.get("points", 10)
+        tot += pts
+        sc, hits = coverage_score(student_answer, issue)
+        got += sc
+        per_issue.append({
+            "issue": issue["name"], "max_points": pts, "score": sc,
+            "keywords_hit": hits, "keywords_total": issue["keywords"],
+        })
+    cov_pct = 100.0 * got / max(1, tot)
+    final = (weights["similarity"] * sim_pct + weights["coverage"] * cov_pct) / (weights["similarity"] + weights["coverage"])
+
+    missing = []
+    for row in per_issue:
+        missed = [kw for kw in row["keywords_total"] if kw not in row["keywords_hit"]]
+        if missed:
+            missing.append({"issue": row["issue"], "missed_keywords": missed})
+
+    substantive_flags = detect_substantive_flags(student_answer)
+
+    return {
+        "similarity_pct": round(sim_pct, 1),
+        "coverage_pct": round(cov_pct, 1),
+        "final_score": round(final, 1),
+        "per_issue": per_issue,
+        "missing": missing,
+        "substantive_flags": substantive_flags,   # keep this if you still want it
+    }
+    
 # ---------------- Web Retrieval (RAG) ----------------
 ALLOWED_DOMAINS = {
     "eur-lex.europa.eu",        # EU law (MAR, PR, MiFID II, TD)
@@ -1484,8 +1533,7 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
     for ch, m in zip(booklet_chunks, booklet_metas):
         has_kw = booklet_chunk_relevant(ch, extracted_keywords, user_query)
         case_match = bool(uq_cases and set(uq_cases).intersection(set(m.get("cases") or [])))
-        para_match = bool(uq_paras and set(uq_paras).intersection(set(m.get("paras") or [])))
-        if has_kw or case_match or para_match:  
+        if has_kw or case_match:
             filtered_chunks.append(ch)
             filtered_metas.append(m)
     if filtered_chunks:
@@ -1862,6 +1910,14 @@ def generate_with_continuation(messages, api_key, model_name, temperature=0.2, f
             reply = (reply.rstrip() + "\n" + more.strip())
     return reply
 
+def render_sources_used(source_lines: list[str]) -> None:
+    with st.expander("📚 Sources used", expanded=False):
+        if not source_lines:
+            st.write("— no web sources available —")
+            return
+        for line in source_lines:
+            st.markdown(f"- {line}")
+
 # --- Citation post-processing & filtering ---
 def parse_cited_indices(text: str) -> list[int]:
     try:
@@ -1927,6 +1983,20 @@ def detect_case_numbers(text: str) -> list[int]:
     return out
 
 @st.cache_resource(show_spinner=False)
+
+def _dehyphenate_join(prev: str, curr: str) -> str:
+    """
+    Join two line fragments, removing soft hyphenation like: "disclo-" + "sure" -> "disclosure".
+    Only if prev ends with '-' and curr starts with lowercase letter.
+    """
+    if prev.endswith("-") and curr and curr[:1].islower():
+        return prev[:-1] + curr
+    # otherwise join with space (avoid double spaces)
+    if prev and curr:
+        if prev.endswith((" ", "—", "–")) or curr.startswith((" ", "—", "–")):
+            return prev + curr
+        return prev + " " + curr
+    return prev or curr
 
 # --- Chat callbacks ------------------------------------------------------------
 def clear_chat_draft():

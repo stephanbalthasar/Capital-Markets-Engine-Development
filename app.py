@@ -820,7 +820,7 @@ def improved_keyword_extraction(text: str, max_keywords: int = 20) -> list[str]:
 
     return final_keywords[:max_keywords]
     
-def extract_issues_from_model_answer(model_answer: str, llm_api_key: str) -> list[dict]:
+def extract_issues_from_model_answer(model_answer: str, llm_api_key: str, model_name: str) -> list[dict]:
     model_answer = (model_answer or "").strip()
     if not model_answer:
         return []

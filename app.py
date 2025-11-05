@@ -1894,7 +1894,7 @@ def truncate_block(s: str, max_chars: int = 3600) -> str:
     s = s or ""
     return s if len(s) <= max_chars else (s[:max_chars] + " …")
 
-def generate_with_continuation(messages, api_key, model_name, temperature=0.2, first_tokens=1800, continue_tokens=600):
+def generate_with_continuation(messages, api_key, model_name, temperature=0.2, first_tokens=2000, continue_tokens=700):
     """
     Calls the LLM, and if output ends mid-sentence, asks it to continue once.
     """

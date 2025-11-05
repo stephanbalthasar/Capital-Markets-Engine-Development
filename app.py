@@ -828,7 +828,7 @@ def extract_issues_from_model_answer(model_answer: str, llm_api_key: str, model_
     # Attempt LLM extraction
     sys = "Respond with VALID JSON only: either an array or {\"issues\": [...]}. No prose, no fences."
     user = (
-        "Extract the key issues from the MODEL ANSWER.\n"
+        "Extract all key issues from the MODEL ANSWER.\n"
         "Return JSON ONLY (no code fences). Each item:\n"
         "{ \"name\": \"short issue name\", \"keywords\": [\"3-8 indicative phrases\"], \"importance\": 1-10 }\n\n"
         "MODEL ANSWER:\n" + model_answer
@@ -838,7 +838,7 @@ def extract_issues_from_model_answer(model_answer: str, llm_api_key: str, model_
         {"role": "user", "content": user},
     ]
 
-    raw = call_groq(messages, api_key=llm_api_key, model_name=model_name, temperature=0.0, max_tokens=900)
+    raw = call_groq(messages, api_key=llm_api_key, model_name=model_name, temperature=0.1, max_tokens=1000)
     parsed = _try_parse_json(raw)
     issues = _coerce_issues(parsed)
     primary = derive_primary_scope(model_answer)
@@ -866,6 +866,7 @@ def extract_issues_from_model_answer(model_answer: str, llm_api_key: str, model_
         }]
 
     return issues
+
 def generate_rubric_from_model_answer(student_answer: str, model_answer: str, backend, llm_api_key: str, weights: dict) -> dict:
     extracted_issues = extract_issues_from_model_answer(model_answer, llm_api_key, model_name=model_name)
     if not extracted_issues:

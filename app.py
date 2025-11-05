@@ -838,7 +838,7 @@ def extract_issues_from_model_answer(model_answer: str, llm_api_key: str, model_
         {"role": "user", "content": user},
     ]
 
-    raw = call_groq(messages, api_key=llm_api_key, model_name=model_name, temperature=0.1, max_tokens=1000)
+    raw = call_groq(messages, api_key=llm_api_key, model_name=model_name, temperature=0.2, max_tokens=1200)
     parsed = _try_parse_json(raw)
     issues = _coerce_issues(parsed)
     primary = derive_primary_scope(model_answer)
@@ -1583,7 +1583,7 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
     idx = np.argsort(sims)[::-1]
 
     # ✅ Similarity floor to keep only reasonably relevant snippets
-    MIN_SIM = 0.22  # tune if needed
+    MIN_SIM = 0.2  # tune if needed
 
     # ---- Select top snippets grouped by (booklet page) or (web page index)
     per_page = {}

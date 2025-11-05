@@ -2060,7 +2060,7 @@ with st.sidebar:
 
     model_name = st.selectbox(
         "Model (free)",
-        options=["llama-3.1-8b-instant", "llama-3.1-70b-versatile"],
+        options=["llama-3.1-8b-instant", "llama-3.3-70b-versatile"],
         index=1, 
         help="Both are free; 8B is faster, 70B is smarter (and slower)."
     )

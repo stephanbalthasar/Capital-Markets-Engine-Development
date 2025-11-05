@@ -820,7 +820,7 @@ def improved_keyword_extraction(text: str, max_keywords: int = 20) -> list[str]:
 
     return final_keywords[:max_keywords]
     
-def extract_issues_from_model_answer(model_answer: str, llm_api_key: str, model_name: str) -> list[dict]:
+def extract_issues_from_model_answer(model_answer: str, llm_api_key: str) -> list[dict]:
     model_answer = (model_answer or "").strip()
     if not model_answer:
         return []
@@ -828,7 +828,7 @@ def extract_issues_from_model_answer(model_answer: str, llm_api_key: str, model_
     # Attempt LLM extraction
     sys = "Respond with VALID JSON only: either an array or {\"issues\": [...]}. No prose, no fences."
     user = (
-        "Extract all key issues from the MODEL ANSWER.\n"
+        "Extract the key issues from the MODEL ANSWER.\n"
         "Return JSON ONLY (no code fences). Each item:\n"
         "{ \"name\": \"short issue name\", \"keywords\": [\"3-8 indicative phrases\"], \"importance\": 1-10 }\n\n"
         "MODEL ANSWER:\n" + model_answer
@@ -838,7 +838,7 @@ def extract_issues_from_model_answer(model_answer: str, llm_api_key: str, model_
         {"role": "user", "content": user},
     ]
 
-    raw = call_groq(messages, api_key=llm_api_key, model_name=model_name, temperature=0.2, max_tokens=1200)
+    raw = call_groq(messages, api_key=llm_api_key, model_name="llama-3.1-8b-instant", temperature=0.0, max_tokens=900)
     parsed = _try_parse_json(raw)
     issues = _coerce_issues(parsed)
     primary = derive_primary_scope(model_answer)
@@ -866,9 +866,8 @@ def extract_issues_from_model_answer(model_answer: str, llm_api_key: str, model_
         }]
 
     return issues
-
 def generate_rubric_from_model_answer(student_answer: str, model_answer: str, backend, llm_api_key: str, weights: dict) -> dict:
-    extracted_issues = extract_issues_from_model_answer(model_answer, llm_api_key, model_name=model_name)
+    extracted_issues = extract_issues_from_model_answer(model_answer, llm_api_key)
     if not extracted_issues:
         return {
             "similarity_pct": 0.0,
@@ -954,7 +953,7 @@ def filter_model_answer_and_rubric(selected_question: str, model_answer: str, ap
         lo, hi = 0, end
 
     model_answer_filtered = model_answer[lo:hi].strip()
-    extracted_issues = extract_issues_from_model_answer(model_answer_filtered, api_key, model_name=model_name)
+    extracted_issues = extract_issues_from_model_answer(model_answer_filtered, api_key)
     return model_answer_filtered, extracted_issues
     
 # ---------------- Robust keyword & citation checks ----------------
@@ -1245,7 +1244,7 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
 # MODEL-CONSISTENCY GUARDRAIL (general, no question-specific logic)
 # =======================
 
-def _json_only(messages, api_key, model_name: str, max_tokens=700):
+def _json_only(messages, api_key, model_name="llama-3.1-8b-instant", max_tokens=700):
     """Calls Groq and returns JSON-parsed dict/list or None. Reuses call_groq + _try_parse_json present in your app."""
     raw = call_groq(messages, api_key=api_key, model_name=model_name, temperature=0.0, max_tokens=max_tokens)
     return _try_parse_json(raw)
@@ -1583,7 +1582,7 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
     idx = np.argsort(sims)[::-1]
 
     # ✅ Similarity floor to keep only reasonably relevant snippets
-    MIN_SIM = 0.2  # tune if needed
+    MIN_SIM = 0.22  # tune if needed
 
     # ---- Select top snippets grouped by (booklet page) or (web page index)
     per_page = {}
@@ -1612,7 +1611,7 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
     return top_pages, source_lines
 
 # ---------------- LLM via Groq (free) ----------------
-def call_groq(messages: List[Dict], api_key: str, model_name: str,
+def call_groq(messages: List[Dict], api_key: str, model_name: str = "llama-3.1-8b-instant",
               temperature: float = 0.2, max_tokens: int = 700) -> str:
     """
     Groq OpenAI-compatible chat endpoint. Models like llama-3.1-8b-instant / 70b-instant are free.
@@ -1748,7 +1747,6 @@ OUTPUT FORMAT (use EXACTLY these headings):
 • <claim> — [Correct|Incorrect|Not supported]
 
 **Mistakes:**
-• <incorrect claim> — Explanation of why it is incorrect [n]
 • <incorrect claim> — Explanation of why it is incorrect [n]
 
 **Missing Aspects:**
@@ -1897,7 +1895,7 @@ def truncate_block(s: str, max_chars: int = 3600) -> str:
     s = s or ""
     return s if len(s) <= max_chars else (s[:max_chars] + " …")
 
-def generate_with_continuation(messages, api_key, model_name, temperature=0.3, first_tokens=2000, continue_tokens=300):
+def generate_with_continuation(messages, api_key, model_name, temperature=0.2, first_tokens=1200, continue_tokens=350):
     """
     Calls the LLM, and if output ends mid-sentence, asks it to continue once.
     """
@@ -2062,11 +2060,10 @@ with st.sidebar:
 
     model_name = st.selectbox(
         "Model (free)",
-        options=["llama-3.1-8b-instant", "llama-3.3-70b-versatile"],
-        index=1, 
+        options=["llama-3.1-8b-instant", "llama-3.1-70b-instant"],
+        index=0,
         help="Both are free; 8B is faster, 70B is smarter (and slower)."
     )
-
     temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.05)
 
     st.header("🌐 Web Retrieval")

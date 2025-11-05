@@ -867,7 +867,7 @@ def extract_issues_from_model_answer(model_answer: str, llm_api_key: str, model_
 
     return issues
 def generate_rubric_from_model_answer(student_answer: str, model_answer: str, backend, llm_api_key: str, weights: dict) -> dict:
-    extracted_issues = extract_issues_from_model_answer(model_answer, llm_api_key)
+    extracted_issues = extract_issues_from_model_answer(model_answer, llm_api_key, model_name=model_name)
     if not extracted_issues:
         return {
             "similarity_pct": 0.0,
@@ -953,7 +953,7 @@ def filter_model_answer_and_rubric(selected_question: str, model_answer: str, ap
         lo, hi = 0, end
 
     model_answer_filtered = model_answer[lo:hi].strip()
-    extracted_issues = extract_issues_from_model_answer(model_answer_filtered, api_key)
+    extracted_issues = extract_issues_from_model_answer(model_answer_filtered, api_key, model_name=model_name)
     return model_answer_filtered, extracted_issues
     
 # ---------------- Robust keyword & citation checks ----------------

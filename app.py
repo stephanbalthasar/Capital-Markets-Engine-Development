@@ -1164,128 +1164,65 @@ def _presence_set(student_answer: str, model_answer_slice: str) -> set[str]:
 
     return present
 
-def format_feedback_and_filter_missing(reply: str,
-                                       student_answer: str,
-                                       model_answer_slice: str,
-                                       rubric: dict) -> str:
+def format_feedback_and_filter_missing(reply: str, student_answer: str, model_answer_slice: str, rubric: dict) -> str:
     """
-    Reformats feedback into five clear sections and removes 'Missing Aspects'
-    bullets that are already present in the student's answer.
-
-    High-recall guard:
-      - Uses rubric['per_issue'][...]['keywords_hit'] (deterministic).
-      - Uses _presence_set(student_answer, model_answer_slice) to catch anchors
-        like Art/§ cites, acronyms (MAR/PR/...), ECJ case numbers, named cases.
+    Reformats feedback into five clear sections:
+    - Student's Core Claims
+    - Mistakes
+    - Missing Aspects
+    - Suggestions
+    - Conclusion
+    Each section is formatted with bullet points and explanations where needed.
     """
+    
     if not reply:
         return reply
 
-    # --- 1) Normalize headings (defensive; keep your originals) ---
-    reply = re.sub(r"(?im)^\s*CLAIMS\s*:\s*$", "Student's Core Claims:", reply)
-    reply = re.sub(r"(?im)^\s*Mistakes\s*:\s*$", "Mistakes:", reply)
-    reply = re.sub(r"(?im)^\s*Missing Aspects\s*:\s*$", "Missing Aspects:", reply)
-    reply = re.sub(r"(?im)^\s*Suggestions\s*:\s*$", "Suggestions:", reply)
-    reply = re.sub(r"(?im)^\s*Conclusion\s*:\s*$", "Conclusion:", reply)
+    # Normalize headings
+    reply = re.sub(r"(?im)^\\s*CLAIMS\\s*:\\s*$", "Student's Core Claims:", reply)
+    reply = re.sub(r"(?im)^\\s*Mistakes\\s*:\\s*$", "Mistakes:", reply)
+    reply = re.sub(r"(?im)^\\s*Missing Aspects\\s*:\\s*$", "Missing Aspects:", reply)
+    reply = re.sub(r"(?im)^\\s*Suggestions\\s*:\\s*$", "Suggestions:", reply)
+    reply = re.sub(r"(?im)^\\s*Conclusion\\s*:\\s*$", "Conclusion:", reply)
 
-    # --- 2) Bold headings & ensure one newline after each (idempotent) ---
+    # Bold headings and ensure spacing
     headings = {
         "Student's Core Claims:": "**Student's Core Claims:**",
         "Mistakes:": "**Mistakes:**",
         "Missing Aspects:": "**Missing Aspects:**",
         "Suggestions:": "**Suggestions:**",
-        "Conclusion:": "**Conclusion:**",
+        "Conclusion:": "**Conclusion:**"
     }
     for h, bold_h in headings.items():
-        # place heading on its own line
-        reply = re.sub(rf"(?im)^\s*{re.escape(h)}\s*$", bold_h + "\n", reply)
+        reply = re.sub(rf"(?im)^\\s*{re.escape(h)}\\s*$", bold_h + "\\n", reply)
 
-    # --- 3) Build high-recall PRESENT evidence sets ---
-    # 3a) Deterministic: keywords actually detected in student's answer
-    present_keywords = {
-        (kw or "").strip().lower()
-        for row in (rubric or {}).get("per_issue", [])
-        for kw in row.get("keywords_hit", [])
-        if kw
-    }
+    # Remove hallucinated 'Missing Aspects' (already present in student answer)
+    present = set()
+    for row in (rubric or {}).get("per_issue", []):
+        present.update({kw.lower() for kw in row.get("keywords_hit", [])})
 
-    # 3b) High-recall anchors (Art/§/C‑numbers/acronyms/named cases)
-    try:
-        present_anchors = {a.strip().lower() for a in _presence_set(student_answer, model_answer_slice)}
-    except Exception:
-        present_anchors = set()
+    def _find_section(text, title_regex):
+        m = re.search(rf"({title_regex}\\s*)(.*?)(\\n(?:\\*\\*Student's Core Claims:\\*\\*|\\*\\*Mistakes:\\*\\*|\\*\\*Suggestions:\\*\\*|\\*\\*Conclusion:\\*\\*|$))", text, flags=re.S | re.I)
+        return m.groups() if m else (None, None, None)
 
-    # Merge both signals
-    present_all = set(filter(None, present_keywords | present_anchors))
-
-    # --- Helper: relaxed contains check (token-aware) ---
-    def _norm(s: str) -> str:
-        return re.sub(r"\s+", " ", (s or "").strip()).lower()
-
-    def _mentions_any(haystack: str, needles: set[str]) -> bool:
-        """
-        A bullet is considered present if:
-          - direct substring match (case-insensitive), OR
-          - ALL tokens (len>=2) of a needle occur in the haystack (very forgiving).
-        """
-        h = _norm(haystack)
-        if not h or not needles:
-            return False
-        for n in needles:
-            n_norm = _norm(n)
-            if not n_norm:
-                continue
-            # direct substring
-            if n_norm in h:
-                return True
-            # token-wise relaxed match (e.g., "art 7(2)" + "mar" split mentions)
-            toks = [t for t in re.split(r"[^\w§]+", n_norm) if len(t) >= 2]
-            if toks and all(t in h for t in toks):
-                return True
-        return False
-
-    # --- 4) Find the 'Missing Aspects' section (accept bold or plain) ---
-    def _find_section(text: str, title_regex: str):
-        """
-        Return (head, body, tail, span) for the section whose title matches title_regex.
-        The 'next' boundary is any of the known headings or end-of-text.
-        """
-        next_heads = r"(?:Student's Core Claims:|Mistakes:|Missing Aspects:|Suggestions:|Conclusion:|" \
-                     r"\*\*Student's Core Claims:\*\*|\*\*Mistakes:\*\*|\*\*Missing Aspects:\*\*|" \
-                     r"\*\*Suggestions:\*\*|\*\*Conclusion:\*\*)"
-        m = re.search(
-            rf"((?:\*\*)?{title_regex}(?:\*\*)?\s*)(.*?)(\n(?={next_heads}\s*$)|\Z)",
-            text,
-            flags=re.S | re.I | re.M,
-        )
-        if not m:
-            return None, None, None, None
-        return m.group(1), m.group(2), m.group(3), m.span(0)
-
-    head, body, tail, span = _find_section(reply, r"Missing Aspects:")
+    present_keywords = {kw.lower() for row in rubric.get("per_issue", []) for kw in row.get("keywords_hit", [])}
+    
+    head, body, tail = _find_section(reply, r"\\*\\*Missing Aspects:\\*\\*")
     if head:
-        # Turn body into bullets (keep existing bullet prefix '• ' if present)
-        lines = [ln for ln in (body or "").splitlines() if ln.strip()]
-        bullets = []
-        for ln in lines:
-            ln_clean = ln.strip()
-            if not ln_clean:
-                continue
-            bullets.append(ln_clean if ln_clean.startswith("• ") else f"• {ln_clean}")
+        bullets = [f"• {ln.strip()}" for ln in body.strip().splitlines() if ln.strip()]
+        def fuzzy_keyword_match(bullet: str, present_keywords: set) -> bool:
+            bullet_low = bullet.lower()
+            for kw in present_keywords:
+                kw_tokens = kw.lower().split()
+                if all(tok in bullet_low for tok in kw_tokens):
+                    return True
+            return False
+        kept = [b for b in bullets if not any(p in b.lower() for p in present)]
+        reply = reply.replace(head + body + tail, head + ("\n".join(kept) + "\n" if kept else "—\n") + tail)
 
-        # --- 5) Filter out bullets that reference PRESENT evidence ---
-        kept = []
-        for b in bullets:
-            b_low = _norm(b)
-            # If bullet mentions anything we already saw in the student's answer, drop it
-            if _mentions_any(b_low, present_all):
-                continue
-            kept.append(b)
-
-        new_block = "—\n" if not kept else "\n".join(kept) + "\n"
-        reply = reply.replace(head + body + (tail or ""), head + new_block + (tail or ""))
-
-    # --- 6) Collapse excessive blank lines & return ---
+    # Collapse excessive blank lines
     reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
+
     return reply
 
 # =======================

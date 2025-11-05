@@ -16,7 +16,6 @@ import streamlit as st
 
 from bs4 import BeautifulSoup
 from docx import Document
-from docx import Document
 from docx.text.paragraph import Paragraph
 from docx.table import Table, _Cell
 from docx.oxml.text.paragraph import CT_P

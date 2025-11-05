@@ -1745,14 +1745,18 @@ OUTPUT FORMAT (use EXACTLY these headings):
 
 **Student's Core Claims:**
 • <claim> — [Correct|Incorrect|Not supported]
+• <claim> — [Correct|Incorrect|Not supported]
 
 **Mistakes:**
+• <incorrect claim> — Explanation of why it is incorrect [n]
 • <incorrect claim> — Explanation of why it is incorrect [n]
 
 **Missing Aspects:**
 • <missing concept> — Explanation of why it matters [n]
+• <missing concept> — Explanation of why it matters [n]
 
 **Suggestions**
+• <optional suggestion to improve clarity or depth> [n]
 • <optional suggestion to improve clarity or depth> [n]
 
 **Conclusion:**

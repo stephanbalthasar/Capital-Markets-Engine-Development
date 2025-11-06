@@ -593,128 +593,7 @@ def _try_parse_json(raw: str):
         return json.loads(raw)
     except Exception:
         return None
-
-# ---------- Purely algorithmic fallback (scales to any case) ----------
-def _auto_issues_from_text(text: str, max_issues: int = 8) -> list[dict]:
-    """
-    Build issues from the MODEL_ANSWER only (no LLM, no hard-coded topics):
-      1) Split into sentences.
-      2) TF-IDF over uni/bi/tri-grams → top phrases.
-      3) Light boost for law-like references (Art/§/C‑number/etc.).
-      4) For each phrase, derive 3–6 keywords from its best-matching sentences.
-      5) Importance decays with rank (top gets 10).
-    """
-    clean = (text or "").strip()
-    if not clean:
-        return []
-
-    # Sentences (simple heuristic)
-    sents = [s.strip() for s in re.split(r"(?<=[\.\!\?])\s+", clean) if s.strip()]
-    if not sents:
-        sents = [clean]
-
-    # TF-IDF over n-grams
-    stop = set([
-        "the","a","an","and","or","of","to","for","in","on","by","with","without",
-        "be","is","are","was","were","as","that","this","those","these","it","its",
-        "students","should","would","could","also","however","therefore","pursuant",
-        "within","meaning","includes","including"
-    ])
-    vec = TfidfVectorizer(
-        ngram_range=(1,3),
-        max_features=3000,
-        stop_words="english"  # keep generic; we already added a few extra above
-    )
-    X = vec.fit_transform(sents)   # shape: [n_sents, n_terms]
-    terms = np.array(vec.get_feature_names_out())
-
-    # Aggregate importance per term across sentences (sum TF-IDF)
-    tfidf_sum = np.asarray(X.sum(axis=0)).ravel()
-
-    # Light domain-agnostic boosts for law-like patterns (generic & scalable)
-    def _boost_for(term: str) -> float:
-        t = term.lower()
-        boost = 1.0
-        if re.search(r"\b(?:art|article)\s*\d", t): boost *= 1.35
-        if "§" in term or re.search(r"\b§\s*\d", term): boost *= 1.35
-        if re.search(r"\b(?:regulation|directive|mifid|mar|td|wpüg|wphg|pr)\b", t): boost *= 1.2
-        if re.search(r"\bC[\u2011\u2010\u202F\u00A0\-–—]?\d+\/\d+\b", term, re.I): boost *= 1.25  # C‑123/45
-        if re.search(r"\bprospectus\b|\binside information\b|\bacting in concert\b", t): boost *= 1.1
-        return boost
-
-    scores = np.array([tfidf_sum[i] * _boost_for(terms[i]) for i in range(len(terms))])
-
-    # Pick top n distinct phrases, prefer longer n-grams, avoid nested duplicates
-    idx = scores.argsort()[::-1]
-    chosen = []
-    seen = set()
-    for i in idx:
-        phrase = terms[i]
-        # discard trivial tokens
-        if len(phrase) < 3 or phrase.lower() in stop:
-            continue
-        # avoid keeping a phrase fully contained in an already chosen longer phrase
-        if any(phrase in c or c in phrase for c in seen):
-            continue
-        seen.add(phrase)
-        chosen.append((phrase, scores[i]))
-        if len(chosen) >= max_issues:
-            break
-
-    # Map term → sentences it appears in
-    term2sent_ix = {t: [] for t, _ in chosen}
-    for si, s in enumerate(sents):
-        low = s.lower()
-        for t, _ in chosen:
-            if t.lower() in low:
-                term2sent_ix[t].append(si)
-
-    def _keywords_from_sentences(term: str, sent_ix: list[int]) -> list[str]:
-        # Collect top co-occurring tokens from the best 2 sentences
-        sent_ix = (sent_ix or [])[:2]
-        bag = []
-        for si in sent_ix:
-            bag.extend(re.findall(r"[A-Za-z§][A-Za-z0-9()§.\-\/]*", sents[si]))
-        # simple normalisation
-        bag = [w.strip(".,;:()").lower() for w in bag]
-        bag = [w for w in bag if len(w) >= 3 and w not in stop]
-        # keep some legal markers intact
-        # Rank by frequency
-        freqs = {}
-        for w in bag:
-            freqs[w] = freqs.get(w, 0) + 1
-        # seed with the term itself (split into tokens)
-        seeds = [term.lower()]
-        # choose top 3–6 keywords
-        ordered = sorted(freqs.items(), key=lambda kv: (-kv[1], -len(kv[0])))
-        kws = []
-        for w, _ in ordered:
-            if w not in seeds and w not in kws:
-                kws.append(w)
-            if len(kws) >= 5:
-                break
-        # Ensure the term itself (and a title-cased variant) are present
-        base = term.strip()
-        kws = [base] + kws
-        # Unique + cap length
-        out = []
-        for k in kws:
-            if k and k not in out:
-                out.append(k)
-        return out[:6] if len(out) >= 3 else out  # keep 3–6 if possible
-
-    issues = []
-    for rank, (term, sc) in enumerate(chosen, start=1):
-        # Name: title-case lightly but keep 'Art'/§ style intact
-        name = re.sub(r"\b(article|art)\b", "Art", term, flags=re.I)
-        name = name.replace("§", "§ ").replace("  ", " ").strip()
-        name = name[:1].upper() + name[1:]
-        kws = _keywords_from_sentences(term, term2sent_ix.get(term, []))
-        # Importance: simple decay from top (10..max(4,10-(n-1)))
-        importance = max(4, 11 - rank)
-        issues.append({"name": name, "keywords": kws, "importance": importance})
-
-    return issues
+    
 # ---------- Main extractor (no hard-coded topics) ----------
 def improved_keyword_extraction(text: str, max_keywords: int = 20) -> list[str]:
     if not text:
@@ -821,6 +700,7 @@ def extract_issues_from_model_answer(model_answer: str, llm_api_key: str) -> lis
         }]
 
     return issues
+
 def generate_rubric_from_model_answer(student_answer: str, model_answer: str, backend, llm_api_key: str, weights: dict) -> dict:
     extracted_issues = extract_issues_from_model_answer(model_answer, llm_api_key)
     if not extracted_issues:
@@ -912,9 +792,6 @@ def filter_model_answer_and_rubric(selected_question: str, model_answer: str, ap
     return model_answer_filtered, extracted_issues
     
 # ---------------- Robust keyword & citation checks ----------------
-def normalize_ws(s: str) -> str:
-    return re.sub(r"\s+", " ", s).strip()
-
 def canonicalize(s: str, strip_paren_numbers: bool = False) -> str:
     s = s.lower()
     s = s.replace("art.", "art").replace("article", "art").replace("–", "-")
@@ -1087,53 +964,6 @@ def tidy_empty_sections(reply: str) -> str:
                    "", reply, flags=re.S | re.I)
     return reply
 
-# --- High‑recall presence detector for legal cites in the student's answer ---
-def _presence_set(student_answer: str, model_answer_slice: str) -> set[str]:
-    """
-    Build a set of 'present' markers we will trust for removing hallucinated 'missing'.
-    We collect both: (1) patterns found in the MODEL ANSWER (acronyms, Art/§ cites, C‑numbers),
-    and (2) their occurrences in the student's answer (case‑insensitive, hyphen tolerant).
-    """
-    ans = (student_answer or "")
-    ma  = (model_answer_slice or "")
-
-    # 1) pull potential anchors from the model answer (generic, no hard-coding to a domain)
-    acronyms = set(re.findall(r"\b[A-ZÄÖÜ]{2,6}\b", ma))           # MAR, PR, TD, WpHG, WpÜG, etc.
-    art_refs = set(re.findall(r"\b(?:Art\.?|Article)\s*\d+(?:\([^)]+\))*", ma, flags=re.I))
-    par_refs = set(re.findall(r"§\s*\d+[a-z]?(?:\([^)]+\))*", ma))
-    c_cases  = set(re.findall(r"C[\-‑–/]\s*\d+\s*/\s*\d+", ma))     # C-628/13, C‑628/13, etc.
-    names    = set(re.findall(r"\b[Ll]afonta\b|\b[Gg]eltl\b|\b[Hh]ypo\s+Real\s+Estate\b", ma))
-
-    # 2) normalise and build search patterns (tolerate dashed/non-breaking hyphen variants)
-    def norm(x: str) -> str:
-        x = re.sub(r"\s+", " ", x.strip())
-        return x
-
-    raw_markers = {norm(x) for x in (acronyms | art_refs | par_refs | c_cases | names) if x}
-    if not raw_markers:
-        return set()
-
-    # helper: hyphen-flexible pattern for ECJ case numbers
-    def hyflex(s: str) -> str:
-        s = re.escape(s)
-        # make all hyphens flexible; allow NBSP in "C‑628/13" variants
-        s = s.replace(r"C\-", r"C[\-‑–]?").replace(r"\s*/\s*", r"\s*/\s*")
-        return s
-
-    present = set()
-    for m in raw_markers:
-        pat = hyflex(m)
-        if re.search(pat, ans, flags=re.I):
-            present.add(m.lower())
-
-        # also handle relaxed variants for Art/Article, strip spaces like "Art 7(2)"
-        if re.match(r"(?i)^(art\.?|article)\s*\d", m):
-            simple = re.sub(r"(?i)^(art\.?|article)\s*", "", m)
-            if re.search(rf"(?i)\b(art\.?|article)\s*{re.escape(simple)}\b", ans):
-                present.add(m.lower())
-
-    return present
-
 def format_feedback_and_filter_missing(reply: str, student_answer: str, model_answer_slice: str, rubric: dict) -> str:
     """
     Reformats feedback into five clear sections:
@@ -1304,41 +1134,6 @@ def enforce_model_consistency(reply: str, model_answer_filtered: str, api_key: s
     # Best-effort recheck; keep corrected either way
     recheck = check_reply_vs_model_for_contradictions(model_answer_filtered, corrected, api_key, model_name)
     return corrected if recheck.get("consistent", True) else corrected
-
-def summarize_rubric(student_answer: str, model_answer: str, backend, required_issues: List[Dict], weights: Dict):
-    embs = embed_texts([student_answer, model_answer], backend)
-    sim = cos_sim(embs[0], embs[1])
-    sim_pct = max(0.0, min(100.0, 100.0 * (sim + 1) / 2))
-
-    per_issue, tot, got = [], 0, 0
-    for issue in required_issues:
-        pts = issue.get("points", 10)
-        tot += pts
-        sc, hits = coverage_score(student_answer, issue)
-        got += sc
-        per_issue.append({
-            "issue": issue["name"], "max_points": pts, "score": sc,
-            "keywords_hit": hits, "keywords_total": issue["keywords"],
-        })
-    cov_pct = 100.0 * got / max(1, tot)
-    final = (weights["similarity"] * sim_pct + weights["coverage"] * cov_pct) / (weights["similarity"] + weights["coverage"])
-
-    missing = []
-    for row in per_issue:
-        missed = [kw for kw in row["keywords_total"] if kw not in row["keywords_hit"]]
-        if missed:
-            missing.append({"issue": row["issue"], "missed_keywords": missed})
-
-    substantive_flags = detect_substantive_flags(student_answer)
-
-    return {
-        "similarity_pct": round(sim_pct, 1),
-        "coverage_pct": round(cov_pct, 1),
-        "final_score": round(final, 1),
-        "per_issue": per_issue,
-        "missing": missing,
-        "substantive_flags": substantive_flags,   # keep this if you still want it
-    }
     
 # ---------------- Web Retrieval (RAG) ----------------
 ALLOWED_DOMAINS = {
@@ -1451,7 +1246,6 @@ def booklet_chunk_relevant(text: str, extracted_keywords: list[str], user_query:
     keys = [k.lower() for k in (extracted_keywords or [])]
     tgt = text.lower()
     return any(k in tgt for k in (keys + q_terms))
-
 
 def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages, backend,
                                   extracted_keywords, user_query: str = "",
@@ -1876,14 +1670,6 @@ def generate_with_continuation(messages, api_key,  model_name=None, temperature=
             reply = (reply.rstrip() + "\n" + more.strip())
     return reply
 
-def render_sources_used(source_lines: list[str]) -> None:
-    with st.expander("📚 Sources used", expanded=False):
-        if not source_lines:
-            st.write("— no web sources available —")
-            return
-        for line in source_lines:
-            st.markdown(f"- {line}")
-
 # --- Citation post-processing & filtering ---
 def parse_cited_indices(text: str) -> list[int]:
     try:
@@ -1949,20 +1735,6 @@ def detect_case_numbers(text: str) -> list[int]:
     return out
 
 @st.cache_resource(show_spinner=False)
-
-def _dehyphenate_join(prev: str, curr: str) -> str:
-    """
-    Join two line fragments, removing soft hyphenation like: "disclo-" + "sure" -> "disclosure".
-    Only if prev ends with '-' and curr starts with lowercase letter.
-    """
-    if prev.endswith("-") and curr and curr[:1].islower():
-        return prev[:-1] + curr
-    # otherwise join with space (avoid double spaces)
-    if prev and curr:
-        if prev.endswith((" ", "—", "–")) or curr.startswith((" ", "—", "–")):
-            return prev + curr
-        return prev + " " + curr
-    return prev or curr
 
 # --- Chat callbacks ------------------------------------------------------------
 def clear_chat_draft():

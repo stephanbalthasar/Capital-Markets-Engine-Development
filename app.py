@@ -837,7 +837,7 @@ def extract_issues_from_model_answer(model_answer: str, llm_api_key: str) -> lis
         {"role": "user", "content": user},
     ]
 
-    raw = call_groq(messages, api_key=llm_api_key, model_name="llama-3.1-8b-instant", temperature=0.0, max_tokens=900)
+    raw = call_groq(messages, api_key=llm_api_key, model_name=SELECTED_MODEL, temperature=0.0, max_tokens=900)
     parsed = _try_parse_json(raw)
     issues = _coerce_issues(parsed)
     primary = derive_primary_scope(model_answer)
@@ -1243,7 +1243,7 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
 # MODEL-CONSISTENCY GUARDRAIL (general, no question-specific logic)
 # =======================
 
-def _json_only(messages, api_key, model_name="llama-3.1-8b-instant", max_tokens=700):
+def _json_only(messages, api_key, model_name=SELECTED_MODEL, max_tokens=700):
     """Calls Groq and returns JSON-parsed dict/list or None. Reuses call_groq + _try_parse_json present in your app."""
     raw = call_groq(messages, api_key=api_key, model_name=model_name, temperature=0.0, max_tokens=max_tokens)
     return _try_parse_json(raw)
@@ -1610,7 +1610,7 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
     return top_pages, source_lines
 
 # ---------------- LLM via Groq (free) ----------------
-def call_groq(messages: List[Dict], api_key: str, model_name: str = "llama-3.1-8b-instant",
+def call_groq(messages: List[Dict], api_key: str, model_name=SELECTED_MODEL,
               temperature: float = 0.2, max_tokens: int = 700) -> str:
     """
     Groq OpenAI-compatible chat endpoint. Models like llama-3.1-8b-instant / 70b-instant are free.
@@ -2056,13 +2056,13 @@ with st.sidebar:
         st.text_input("GROQ API Key", value="Provided via secrets/env", type="password", disabled=True)
     else:
         api_key = st.text_input("GROQ API Key", type="password", help="Set GROQ_API_KEY in Streamlit Secrets for production.")
-
     model_name = st.selectbox(
         "Model (free)",
         options=["llama-3.1-8b-instant", "llama-3.3-70b-versatile"],
         index=0,
         help="Both are free; 8B is faster, 70B is smarter (and slower)."
     )
+    SELECTED_MODEL = model_name
     temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.05)
 
     st.header("🌐 Web Retrieval")

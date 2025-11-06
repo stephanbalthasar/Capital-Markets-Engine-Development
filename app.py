@@ -420,23 +420,29 @@ def bold_section_headings(reply: str) -> str:
     """
     if not reply:
         return reply
-    
+
     # 1) Canonicalise a few heading variants (defensive)
     reply = re.sub(r"(?im)^\s*CLAIMS\s*:\s*$", "Student's Core Claims:", reply)
-    
-    # 2) Bold-format the canonical headings
+    reply = re.sub(r"(?im)^\s*MISTAKES\s*:\s*$", "Mistakes:", reply)
+
+    # 2) Bold-format the canonical headings (now includes Mistakes)
     patterns = {
-        r"(?im)^\s*Student's Core Claims:\s*$": "**Student's Core Claims:**",
-        r"(?im)^\s*Missing Aspects:\s*$":        "**Missing Aspects:**",
-        r"(?im)^\s*Suggestions:\s*$":            "**Suggestions:**",
-        r"(?im)^\s*Conclusion:\s*$":             "**Conclusion:**",
+        r"(?im)^\s*Student's Core Claims:\s*$": r"**Student's Core Claims:**",
+        r"(?im)^\s*Mistakes:\s*$":              r"**Mistakes:**",
+        r"(?im)^\s*Missing Aspects:\s*$":       r"**Missing Aspects:**",
+        r"(?im)^\s*Suggestions:\s*$":           r"**Suggestions:**",
+        r"(?im)^\s*Conclusion:\s*$":            r"**Conclusion:**",
     }
     for pat, repl in patterns.items():
         reply = re.sub(pat, repl, reply)
 
-    # 3) Guarantee exactly one newline after any bold heading
+    # 3) Guarantee exactly one newline after any bold heading (add Mistakes)
     reply = re.sub(
-        r"(?m)^(?:\*\*Student's Core Claims:\*\*|\*\*Missing Aspects:\*\*|\*\*Suggestions:\*\*|\*\*Conclusion:\*\*)(?:[ \t]*)$",
+        r"(?m)^(?:\*\*Student's Core Claims:\*\*|"
+        r"\*\*Mistakes:\*\*|"
+        r"\*\*Missing Aspects:\*\*|"
+        r"\*\*Suggestions:\*\*|"
+        r"\*\*Conclusion:\*\*)(?:[ \t]*)$",
         lambda m: m.group(0) + "\n",
         reply,
     )

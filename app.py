@@ -1705,12 +1705,22 @@ def build_feedback_prompt(student_answer: str, rubric: dict, model_answer: str, 
     issue_names = [row["issue"] for row in rubric.get("per_issue", [])]
     present = [kw for row in rubric.get("per_issue", []) for kw in row.get("keywords_hit", [])]
     missing = [kw for m in rubric.get("missing", []) for kw in m.get("missed_keywords", [])]
-
     present_block = "• " + "\n• ".join(present) if present else "—"
     missing_block = "• " + "\n• ".join(missing) if missing else "—"
-
+    exclusion_block = ""
+    excluded = rubric.get("excluded_keywords", [])
+    if excluded:
+        exclusion_block = (
+            "\nEXCLUSION RULE:\n"
+            "The following provisions are explicitly marked in the MODEL ANSWER as not required for this question:\n"
+            + "\n".join(f"- {kw}" for kw in excluded)
+            + "\nIf the student does not mention them, do not include them in 'Missing Aspects'.\n"
+            + "If the student does mention them, evaluate correctness and include feedback if appropriate."
+        )
+    
     return f"""
 GRADE THE STUDENT'S ANSWER USING THE RUBRIC AND THE WEB/BOOKLET SOURCES.
+{exclusion_block}
 
 STUDENT ANSWER:
 \"\"\"{student_answer}\"\"\"

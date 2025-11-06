@@ -319,15 +319,6 @@ def parse_booklet_docx(docx_source: Union[str, IO[bytes]]
     _flush(current, buf, chunks, metas)
     return chunks, metas
 
-# --- Compatibility shim for existing code that expects extract_booklet_chunks_with_refs(...) ---
-def extract_booklet_chunks_with_refs(docx_source: Union[str, IO[bytes]],
-                                    chunk_words_hint: int | None = None
-                                   ) -> Tuple[List[str], List[Dict[str, Any]]]:
-    """
-    Backward-compatible signature. Ignores chunk_words_hint (we already have clean anchors).
-    """
-    return parse_booklet_docx(docx_source)
-
 # --- Cached loader for parsed anchors (Word) ---
 @st.cache_data(show_spinner=False)
 def load_booklet_anchors(docx_source: Union[str, IO[bytes]]) -> Tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]]]:
@@ -337,7 +328,7 @@ def load_booklet_anchors(docx_source: Union[str, IO[bytes]]) -> Tuple[List[Dict[
       chunks:  raw text chunks (same order)
       metas:   per-chunk metadata (same order)
     """
-    chunks, metas = extract_booklet_chunks_with_refs(docx_source, chunk_words_hint=None)
+    chunks, metas = parse_booklet_docx(docx_source)
 
     def first_words(text: str, n=10) -> str:
         toks = (text or "").split()
@@ -362,6 +353,31 @@ def load_booklet_anchors(docx_source: Union[str, IO[bytes]]) -> Tuple[List[Dict[
 ## ---------------------------------------------------------------------------------------------
 
 # ---------- Public helpers you will call from the app ----------
+def normalize_headings(text: str) -> str:
+    """Standardize and bold section headings."""
+    if not text:
+        return text
+
+    # Canonicalize variants
+    text = re.sub(r"(?im)^\\s*CLAIMS\\s*:\\s*$", "Student's Core Claims:", text)
+    text = re.sub(r"(?im)^\\s*MISTAKES\\s*:\\s*$", "Mistakes:", text)
+
+    # Bold-format canonical headings
+    patterns = {
+        r"(?im)^\\s*Student's Core Claims:\\s*$": "**Student's Core Claims:**",
+        r"(?im)^\\s*Mistakes:\\s*$": "**Mistakes:**",
+        r"(?im)^\\s*Missing Aspects:\\s*$": "**Missing Aspects:**",
+        r"(?im)^\\s*Suggestions:\\s*$": "**Suggestions:**",
+        r"(?im)^\\s*Conclusion:\\s*$": "**Conclusion:**",
+    }
+    for pat, repl in patterns.items():
+        text = re.sub(pat, repl + "\n", text)
+
+    # Collapse excessive blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
+    return text
+
 def add_good_catch_for_optionals(reply: str, rubric: dict) -> str:
     bonus = rubric.get("bonus") or []
     if not reply or not bonus:
@@ -378,44 +394,6 @@ def add_good_catch_for_optionals(reply: str, rubric: dict) -> str:
         reply = suggestions_hdr.sub("**Suggestions**:\n" + "\n".join(bullets) + "\n", reply, count=1)
     else:
         reply = reply.rstrip() + "\n\n**Suggestions**:\n" + "\n".join(bullets) + "\n"
-    return reply
-
-def bold_section_headings(reply: str) -> str:
-    """
-    Make core section headings bold and ensure a blank line after each.
-    Safe to call on already-formatted text (idempotent).
-    """
-    if not reply:
-        return reply
-
-    # 1) Canonicalise a few heading variants (defensive)
-    reply = re.sub(r"(?im)^\s*CLAIMS\s*:\s*$", "Student's Core Claims:", reply)
-    reply = re.sub(r"(?im)^\s*MISTAKES\s*:\s*$", "Mistakes:", reply)
-
-    # 2) Bold-format the canonical headings (now includes Mistakes)
-    patterns = {
-        r"(?im)^\s*Student's Core Claims:\s*$": r"**Student's Core Claims:**",
-        r"(?im)^\s*Mistakes:\s*$":              r"**Mistakes:**",
-        r"(?im)^\s*Missing Aspects:\s*$":       r"**Missing Aspects:**",
-        r"(?im)^\s*Suggestions:\s*$":           r"**Suggestions:**",
-        r"(?im)^\s*Conclusion:\s*$":            r"**Conclusion:**",
-    }
-    for pat, repl in patterns.items():
-        reply = re.sub(pat, repl, reply)
-
-    # 3) Guarantee exactly one newline after any bold heading (add Mistakes)
-    reply = re.sub(
-        r"(?m)^(?:\*\*Student's Core Claims:\*\*|"
-        r"\*\*Mistakes:\*\*|"
-        r"\*\*Missing Aspects:\*\*|"
-        r"\*\*Suggestions:\*\*|"
-        r"\*\*Conclusion:\*\*)(?:[ \t]*)$",
-        lambda m: m.group(0) + "\n",
-        reply,
-    )
-
-    # 4) Collapse excessive blank lines
-    reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
     return reply
 
 # --- Grounding guard helpers (add once) ---
@@ -955,13 +933,7 @@ def tidy_empty_sections(reply: str) -> str:
     """
     if not reply:
         return reply
-    # Remove empty sections like 'Missing Aspects:' followed by '—' or blank lines
-    reply = re.sub(r"(Missing Aspects:\s*)(?:—\s*|\s*)(?=\n(?:Conclusion|📚|Sources used|$))",
-                   "", reply, flags=re.S | re.I)
-    reply = re.sub(r"(Mistakes:\s*)(?:—\s*|\s*)(?=\n(?:Missing Aspects|Conclusion|📚|Sources used|$))",
-                   "", reply, flags=re.S | re.I)
-    reply = re.sub(r"(Suggestions:\s*)(?:—\s*|\s*)(?=\n(?:Conclusion|📚|Sources used|$))",
-                   "", reply, flags=re.S | re.I)
+    reply = normalize_headings(reply)
     return reply
 
 def format_feedback_and_filter_missing(reply: str, student_answer: str, model_answer_slice: str, rubric: dict) -> str:
@@ -978,24 +950,8 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
     if not reply:
         return reply
 
-    # Normalize headings
-    reply = re.sub(r"(?im)^\\s*CLAIMS\\s*:\\s*$", "Student's Core Claims:", reply)
-    reply = re.sub(r"(?im)^\\s*Mistakes\\s*:\\s*$", "Mistakes:", reply)
-    reply = re.sub(r"(?im)^\\s*Missing Aspects\\s*:\\s*$", "Missing Aspects:", reply)
-    reply = re.sub(r"(?im)^\\s*Suggestions\\s*:\\s*$", "Suggestions:", reply)
-    reply = re.sub(r"(?im)^\\s*Conclusion\\s*:\\s*$", "Conclusion:", reply)
-
-    # Bold headings and ensure spacing
-    headings = {
-        "Student's Core Claims:": "**Student's Core Claims:**",
-        "Mistakes:": "**Mistakes:**",
-        "Missing Aspects:": "**Missing Aspects:**",
-        "Suggestions:": "**Suggestions:**",
-        "Conclusion:": "**Conclusion:**"
-    }
-    for h, bold_h in headings.items():
-        reply = re.sub(rf"(?im)^\\s*{re.escape(h)}\\s*$", bold_h + "\\n", reply)
-
+        reply = normalize_headings(reply)
+    
     # Remove hallucinated 'Missing Aspects' (already present in student answer)
     present = set()
     for row in (rubric or {}).get("per_issue", []):
@@ -1252,10 +1208,7 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
                                   top_k_pages=8, chunk_words=170):
     booklet_chunks, booklet_metas = [], []
     try:
-        booklet_chunks, booklet_metas = extract_booklet_chunks_with_refs(
-            BOOKLET,
-            chunk_words_hint=None
-        )        
+        booklet_chunks, booklet_metas = parse_booklet_docx(docx_source)         
     except Exception as e:
         st.warning(f"Could not load course booklet: {e}")
     try:
@@ -1583,40 +1536,6 @@ def lock_out_false_missing(reply: str, rubric: dict) -> str:
         return reply.replace(head + body + tail, head + new_block + tail)
     except Exception:
         return reply
-
-
-def enforce_feedback_template(reply: str) -> str:
-    """
-    Light normaliser:
-    - Rename 'CLAIMS:' to 'Student's Core Claims:' if model drifted.
-    - Collapse duplicate 'Correct. This claim aligns...' lines.
-    - Normalise odd bullet artifacts such as 'Suggestions: • • None. •'
-    - Ensure empty sections show as '—'
-    """
-    if not reply:
-        return reply
-
-    # 1) Fix heading drift
-    reply = re.sub(r"(?im)^\s*CLAIMS\s*:\s*$", "Student's Core Claims:", reply)
-
-    # 2) Remove repeated boilerplate "Correct. This claim aligns with the MODEL ANSWER."
-    reply = re.sub(r"(?im)^\s*Correct\. This claim aligns with the MODEL ANSWER\.\s*$", "", reply)
-
-    # 3) Clean stray multiple bullets like "• • None. •"
-    reply = re.sub(r"•\s*•\s*", "• ", reply)  # collapse doubled bullets
-    reply = re.sub(r"(?im)(Suggestions:)\s*•\s*None\.?\s*(?:•\s*)*$", r"\1\n—", reply)
-
-    # 4) If a heading is present but no content, replace with '—'
-    for title in ["Missing Aspects:", "Suggestions:"]:
-        reply = re.sub(
-            rf"(?is)({re.escape(title)}\s*)(?:-+\s*|\s*)\n?(?=\n|$)",
-            r"\1—\n",
-            reply
-        )
-
-    # 5) Remove a few accidental blank lines
-    reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
-    return reply
 
 def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_block: str, excerpts_block: str) -> List[Dict]:
     msgs = [{"role": "system", "content": system_guardrails()}]

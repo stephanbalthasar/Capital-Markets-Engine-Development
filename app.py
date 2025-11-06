@@ -461,43 +461,40 @@ def _anchors_from_model(model_answer_slice: str, cap: int = 20) -> list[str]:
             break
     return out
 
-def prune_redundant_improvements(student_answer: str, reply: str) -> str:
+def prune_redundant_improvements(student_answer: str, reply: str, rubric: dict) -> str:
     """
-    Remove bullets that recommend adding content clearly present in the student's answer.
-    Uses simple anchor regexes to detect presence.
+    Removes 'Missing Aspects' bullets that recommend adding content already present
+    in the student's answer, based on rubric-derived keyword hits.
     """
-    if not reply:
+    if not reply or not rubric:
         return reply
-    anchors = [
-        r"\bLafonta\b",
-        r"\bArt(?:icle)?\s*7\s*\(\s*2\s*\)\b",
-        r"\breasonably\s+be\s+expected\s+to\s+occur\b",
-        r"\bArt(?:icle)?\s*7\s*\(\s*4\s*\)\b",
-        r"\bArt(?:icle)?\s*17\s*\(\s*1\s*\)\b",
-        r"\bArt(?:icle)?\s*17\s*\(\s*4\s*\)\b",
-    ]
-    stu = student_answer.lower()
 
-    def present(pat: str) -> bool:
-        return re.search(pat, stu, flags=re.I) is not None
+    # Collect all keywords already detected in the student's answer
+    present_keywords = {
+        kw.lower().strip()
+        for row in rubric.get("per_issue", [])
+        for kw in row.get("keywords_hit", [])
+        if kw
+    }
 
-    m = re.search(r"(Missing Aspects:\s*)(.*?)(\n(?:Conclusion|📚|Sources used|$))",
-        reply,
-        flags=re.S | re.I
-    )    
+    # Find the 'Missing Aspects' section
+    m = re.search(r"(?is)(Missing Aspects:\s*)(.*?)(?=\n(?:Conclusion|Suggestions|Sources used|$))", reply)
     if not m:
         return reply
 
-    head, block, tail = m.group(1), m.group(2), m.group(3)
-    lines = [ln for ln in re.split(r"\n\s*•\s*", block.strip()) if ln.strip()]
+    head, body = m.group(1), m.group(2)
+    bullets = [ln.strip() for ln in re.split(r"\n\s*•\s*", body.strip()) if ln.strip()]
     kept = []
-    for ln in lines:
-        # Drop bullet if any anchor it references is already present in student answer
-        if any(re.search(p, ln, re.I) and present(p) for p in anchors):
+
+    for bullet in bullets:
+        bullet_lower = bullet.lower()
+        # Drop bullet if any present keyword appears in it
+        if any(kw in bullet_lower for kw in present_keywords):
             continue
-        kept.append(f"• {ln.strip()}")
-    new_block = ("\n".join(kept) + "\n") if kept else "—\n"
-    return reply.replace(m.group(0), head + new_block + tail)
+        kept.append(f"• {bullet}")
+
+    new_block = "\n".join(kept) if kept else "—"
+    return reply.replace(m.group(0), head + new_block + "\n")
 
 # ---------------- Embeddings ----------------
 @st.cache_resource(show_spinner=False)

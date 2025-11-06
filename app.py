@@ -1915,7 +1915,6 @@ with colA:
                 reply = lock_out_false_mistakes(reply, rubric)
                 reply = lock_out_false_missing(reply, rubric)
                 reply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)
-                reply = bold_section_headings(reply)
                 reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
             
                 used_idxs = parse_cited_indices(reply)

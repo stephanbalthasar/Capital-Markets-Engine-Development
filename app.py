@@ -1,6 +1,6 @@
 # app.py
 # EUCapML Case Tutor — University of Bayreuth
-# - Free LLM via Groq (llama-3.1-8b/70b-instant): no credits or payments
+# - Free LLM via Groq (llama-3.1-8b/70b-versatile): no credits or payments
 # - Web retrieval from EUR-Lex, CURIA, ESMA, BaFin, Gesetze-im-Internet
 # - Hidden model answer is authoritative; citations [1], [2] map to sources
 

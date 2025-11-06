@@ -2251,7 +2251,7 @@ with colA:
                 reply = merge_to_suggestions(reply, student_answer, activate=agreement)
                 reply = tidy_empty_sections(reply)
                 reply = add_good_catch_for_optionals(reply, rubric) 
-                reply = prune_redundant_improvements(student_answer, reply)
+                reply = prune_redundant_improvements(student_answer, reply, rubric)
                 reply = lock_out_false_mistakes(reply, rubric)
                 reply = lock_out_false_missing(reply, rubric)
                 reply = enforce_feedback_template(reply)

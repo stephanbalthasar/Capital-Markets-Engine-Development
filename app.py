@@ -1707,6 +1707,7 @@ if not st.session_state.authenticated:
 
 # Sidebar (visible to all users after login)
 with st.sidebar:
+    st.caption(f"App version: `{APP_HASH}`")
     st.header("⚙️ Settings")
     api_key = (st.secrets.get("GROQ_API_KEY") if hasattr(st, "secrets") else None) or os.getenv("GROQ_API_KEY")
     if api_key:

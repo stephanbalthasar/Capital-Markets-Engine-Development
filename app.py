@@ -380,39 +380,6 @@ def add_good_catch_for_optionals(reply: str, rubric: dict) -> str:
         reply = reply.rstrip() + "\n\n**Suggestions**:\n" + "\n".join(bullets) + "\n"
     return reply
 
-def derive_primary_scope(model_answer_slice: str, top_k: int = 2) -> set[str]:
-    """
-    Infer the dominant legal regime(s) for the selected question from its model-answer slice.
-    Uses boundary-aware counts and penalizes regimes that are explicitly marked
-    "not expected / not required / outside scope". Generic and scalable.
-    """
-    text = (model_answer_slice or "")
-
-    # Boundary-aware patterns; include common aliases. Extendable over time.
-    acts = {
-        "mar":      r"\bMAR\b|\bMarket Abuse Regulation\b",
-        "pr":       r"\bPR\b|\bProspectus Regulation\b|\bRegulation\s*\(EU\)\s*2017/1129\b",
-        "mifid ii": r"\bMiFID\s*II\b|\bDirective\s*2014/65/EU\b",
-        "mifir":    r"\bMiFIR\b|\bRegulation\s*600/2014\b",
-        "td":       r"\bTD\b|\bTransparency Directive\b|\bDirective\s*2004/109/EC\b",
-        "wphg":     r"\bWpHG\b",
-        "wpüg":     r"\bWp[üu]G\b",
-    }
-
-    def count_hits(pattern: str) -> int:
-        return len(re.findall(pattern, text, flags=re.I))
-
-    counts = {k: count_hits(pat) for k, pat in acts.items()}
-
-    # Strongly downrank regimes flagged as out-of-scope in the slice itself.
-    for k, pat in acts.items():
-        penalty_pat = rf"(?:not\s+expected|not\s+required|outside(?:\s+the)?\s+scope).{{0,60}}(?:{pat})"
-        if re.search(penalty_pat, text, flags=re.I):
-            counts[k] = max(0, counts[k] - 100)
-
-    top = [k for k, v in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])) if v > 0][:top_k]
-    return set(top)
-
 def bold_section_headings(reply: str) -> str:
     """
     Make core section headings bold and ensure a blank line after each.
@@ -843,21 +810,7 @@ def extract_issues_from_model_answer(model_answer: str, llm_api_key: str) -> lis
     raw = call_groq(messages, api_key=llm_api_key, model_name=SELECTED_MODEL, temperature=0.0, max_tokens=900)
     parsed = _try_parse_json(raw)
     issues = _coerce_issues(parsed)
-    primary = derive_primary_scope(model_answer)
-
-    def issue_scope_markers(it: dict) -> set[str]:
-        s = (" ".join(it.get("keywords", [])) + " " + it.get("name","")).lower()
-        out = set()
-        for a in ["mar","pr","mifid ii","mifir","td","wphg","wpüg"]:
-            if a in s:
-                out.add(a)
-        return out or set(["(unspecified)"])
-
-    for it in issues:
-        scopes = issue_scope_markers(it)
-        it["required"] = bool(primary & scopes)  # required if intersects the primary regime(s)
-        it["scope_laws"] = sorted(scopes)        # keep for explanation/debug
-    
+            
     # Fallback to improved keyword extraction
     if not issues:
         keywords = improved_keyword_extraction(model_answer, max_keywords=20)

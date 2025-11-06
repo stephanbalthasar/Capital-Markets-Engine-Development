@@ -15,7 +15,6 @@ import requests
 import streamlit as st
 
 from bs4 import BeautifulSoup
-from collections import defaultdict
 from docx import Document
 from docx.text.paragraph import Paragraph
 from docx.table import Table, _Cell
@@ -383,161 +382,22 @@ def add_good_catch_for_optionals(reply: str, rubric: dict) -> str:
 
 def derive_primary_scope(model_answer_slice: str, top_k: int = 2) -> set[str]:
     """
-    Infer the dominant legal regime(s)/instruments from a model‑answer slice
-    *without hard‑coding any specific laws*. Heuristics:
-      - Detect generic legal anchors (acronyms, instrument titles, Art/§ cites, case IDs).
-      - Link acronyms to nearby instrument titles (aliasing).
-      - Score by frequency, sentence coverage, proximity to article/section refs,
-        early-position boost; penalize 'out-of-scope' language in local context.
-    Returns a set of up to top_k canonical keys (title if known, else acronym).
+    Infer the dominant legal regime(s) for the selected question from its model-answer slice.
+    Uses boundary-aware counts and penalizes regimes that are explicitly marked
+    "not expected / not required / outside scope". Generic and scalable.
     """
-    text = (model_answer_slice or "").strip()
-    if not text:
-        return set()
+    text = (model_answer_slice or "")
 
-    # -------- helpers (generic; no domain hard-coding) --------
-    # Normalize various hyphens (C‑123/45 etc.) for robust matching
-    def dehyphen(s: str) -> str:
-        return s.replace("\u2011", "-").replace("\u2010", "-").replace("\u2013", "-").replace("\u2014", "-").replace("\u202F", " ").replace("\u00A0", " ")
-
-    text = dehyphen(text)
-
-    # Split into naive sentences to get early-position boost & coverage
-    sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
-    if not sents:
-        sents = [text]
-
-    # Very generic "instrument" markers across languages
-    LEGAL_MARKERS = r"(?:Regulation|Directive|Act|Law|Code|Statute|Ordinance|Rules|Rule|Decree|Ordinanza|Ordonnance|Verordnung|Gesetz|Gesetzbuch|Ordnung)"
-    # Generic article / section references
-    ART_REF   = r"(?:Art\.?|Article)\s*\d+(?:\([^)]+\))*"
-    PARA_REF  = r"§\s*\d+[a-z]?(?:\([^)]+\))*"
-    # Acronyms: 2–8 uppercase letters incl. Umlauts, filter later with a small stoplist
-    ACRONYM   = r"\b[A-ZÄÖÜ]{2,8}\b"
-    # EU/CJEU style case IDs (kept generic); other formats will still be counted as titles/acronyms
-    CASE_ID   = r"\bC-?\s*\d+/\d+\b"
-
-    # Small, language-agnostic uppercase stoplist (kept short on purpose)
-    ACR_STOP  = {"AND", "OR", "THE", "DER", "DIE", "DAS", "VON", "UND", "EIN", "EINE"}
-
-    # Find all anchors with indices to compute proximity/penalties
-    def iter_matches(pat: str):
-        for m in re.finditer(pat, text, flags=re.I):
-            yield m.start(), m.end(), m.group(0)
-
-    titles = []   # instrument titles like "Prospectus Regulation", "Wertpapierhandelsgesetz"
-    for s, e, g in iter_matches(rf"\b(?:{LEGAL_MARKERS})\b(?:[^\n.;:]{{0,80}})?"):
-        # Expand to include preceding qualifiers (e.g., "Prospectus" before "Regulation")
-        # Heuristic: capture up to 2 preceding words if alnum/titlecase
-        start = max(0, s - 60)
-        prefix = text[start:s]
-        m = re.search(r"([A-ZÄÖÜ][a-zäöüßA-ZÄÖÜ0-9\-]{2,}\s+){0,2}$", prefix)
-        if m:
-            s = start + m.start()
-        titles.append((s, e, text[s:e].strip()))
-
-    acronyms = [(s, e, g) for s, e, g in iter_matches(ACRONYM) if g.upper() not in ACR_STOP]
-    artrefs  = list(iter_matches(ART_REF))
-    parrefs  = list(iter_matches(PARA_REF))
-    cases    = list(iter_matches(CASE_ID))
-
-    # Link acronyms <-> nearest title within a small window, so "PR" maps to "Prospectus Regulation"
-    # Build canonical key: prefer the title; fallback to acronym
-    WINDOW = 120
-    alias_for = {}  # ACR -> title
-    for as_, ae, a in acronyms:
-        aU = a.upper()
-        best = None
-        best_dist = 10**9
-        for ts, te, t in titles:
-            dist = min(abs(as_ - te), abs(ts - ae))
-            if dist <= WINDOW and dist < best_dist:
-                best, best_dist = t, dist
-        if best:
-            alias_for[aU] = re.sub(r"\s+", " ", best).strip()
-
-    # Canonicalization: use the longest sensible label we have
-    def canon(label: str) -> str:
-        lab = re.sub(r"\s+", " ", label.strip())
-        # Keep acronyms uppercase; otherwise title-case words but keep ALLCAPS chunks
-        if lab.isupper() and len(lab) <= 8:
-            return lab
-        # Avoid over-titlecasing "of", "and", etc. (simple heuristic)
-        words = lab.split()
-        keep_upper = {w for w in words if w.isupper() and len(w) >= 2}
-        titled = " ".join(w if w in keep_upper else (w[:1].upper() + w[1:]) for w in words)
-        return titled
-
-    # Collect candidate keys from titles and acronyms (with aliasing)
-    candidates = defaultdict(lambda: {"hits": 0, "sent_ix": set(), "art_near": 0, "para_near": 0, "pos_boost": 0.0, "penalty": 0})
-    # Map character index -> sentence index
-    sent_spans = []
-    idx = 0
-    for i, s in enumerate(sents):
-        start = text.find(s, idx)
-        if start < 0:
-            start = idx
-        sent_spans.append((start, start + len(s)))
-        idx = start + len(s)
-
-    def sentence_index_at(pos: int) -> int:
-        for i, (lo, hi) in enumerate(sent_spans):
-            if lo <= pos < hi:
-                return i
-        return len(sent_spans) - 1
-
-    # Register a hit for a key around a given span and count nearby Art/§ references
-    def add_hit(key: str, span_start: int, span_end: int):
-        key = canon(key)
-        c = candidates[key]
-        c["hits"] += 1
-        si = sentence_index_at(span_start)
-        c["sent_ix"].add(si)
-        # local windows for proximity evidence
-        left = max(0, span_start - 80)
-        right = min(len(text), span_end + 80)
-        window = text[left:right]
-        if re.search(ART_REF, window, flags=re.I):
-            c["art_near"] += 1
-        if re.search(PARA_REF, window):
-            c["para_near"] += 1
-        # small position boost for early mentions
-        if si <= 1:  # first two sentences
-            c["pos_boost"] += 0.5
-
-        # penalties if out-of-scope language appears near the key
-        if re.search(r"(not\s+expected|not\s+required|outside(?:\s+the)?\s+scope|need\s+not\s+address|irrelevant)", window, flags=re.I):
-            c["penalty"] += 10
-
-    # Title occurrences
-    for s, e, t in titles:
-        add_hit(t, s, e)
-
-    # Acronym occurrences (mapped where possible)
-    for s, e, a in acronyms:
-        aU = a.upper()
-        label = alias_for.get(aU, aU)
-        add_hit(label, s, e)
-
-    # Also treat stand‑alone case IDs as regimes when they repeat (generic)
-    for s, e, c in cases:
-        add_hit(c, s, e)
-
-    if not candidates:
-        return set()
-
-    # Score: frequency + sentence coverage + proximity bonuses + position boost - penalties
-    scored = []
-    for key, v in candidates.items():
-        freq = v["hits"]
-        sent_cov = len(v["sent_ix"])
-        proximity = 0.6 * v["art_near"] + 0.6 * v["para_near"]
-        score = (1.0 * freq) + (0.8 * sent_cov) + proximity + v["pos_boost"] - v["penalty"]
-        scored.append((score, key))
-
-    scored.sort(key=lambda x: (-x[0], x[1].lower()))
-    top = [k for sc, k in scored if sc > 0][:top_k]
-    return set(top)
+    # Boundary-aware patterns; include common aliases. Extendable over time.
+    acts = {
+        "mar":      r"\bMAR\b|\bMarket Abuse Regulation\b",
+        "pr":       r"\bPR\b|\bProspectus Regulation\b|\bRegulation\s*\(EU\)\s*2017/1129\b",
+        "mifid ii": r"\bMiFID\s*II\b|\bDirective\s*2014/65/EU\b",
+        "mifir":    r"\bMiFIR\b|\bRegulation\s*600/2014\b",
+        "td":       r"\bTD\b|\bTransparency Directive\b|\bDirective\s*2004/109/EC\b",
+        "wphg":     r"\bWpHG\b",
+        "wpüg":     r"\bWp[üu]G\b",
+    }
 
     def count_hits(pattern: str) -> int:
         return len(re.findall(pattern, text, flags=re.I))
@@ -983,43 +843,20 @@ def extract_issues_from_model_answer(model_answer: str, llm_api_key: str) -> lis
     raw = call_groq(messages, api_key=llm_api_key, model_name=SELECTED_MODEL, temperature=0.0, max_tokens=900)
     parsed = _try_parse_json(raw)
     issues = _coerce_issues(parsed)
+    primary = derive_primary_scope(model_answer)
 
-    # 1) Infer dominant regimes/instruments (model‑answer agnostic)
-    primary = derive_primary_scope(model_answer)  # e.g., {"Prospectus Regulation", "Market Abuse Regulation"}
-    
-    # 2) Build simple alias sets for each inferred key, e.g. "Prospectus Regulation" -> {"prospectus regulation", "pr"}
-    def _aliases_for(key: str) -> set[str]:
-        key_norm = re.sub(r"\s+", " ", (key or "").strip())
-        low = key_norm.lower()
-        # Initials from title-cased words: "Prospectus Regulation" -> "PR"
-        words = re.findall(r"[A-Za-zÄÖÜäöüß]+", key_norm)
-        initials = "".join(w[0] for w in words if w and w[0].isalpha()).upper()
-        aliases = {low}
-        if 2 <= len(initials) <= 8:
-            aliases.add(initials.lower())
-        return aliases
-    
-    _primary_aliases: dict[str, set[str]] = {k: _aliases_for(k) for k in primary}
-    
-    # 3) For each issue, detect whether it falls under any inferred key (full title or acronym)
-    def issue_scope_markers(it: dict, inferred_primary: dict[str, set[str]]) -> set[str]:
-        hay = (" ".join(it.get("keywords", [])) + " " + it.get("name", "")).lower()
-        scopes = set()
-        for key, aliases in inferred_primary.items():
-            if any(a and a in hay for a in aliases):
-                scopes.add(key)
-        return scopes or {"(unspecified)"}
-    
-    # 4) Tag issues as required/optional and record matched scopes
+    def issue_scope_markers(it: dict) -> set[str]:
+        s = (" ".join(it.get("keywords", [])) + " " + it.get("name","")).lower()
+        out = set()
+        for a in ["mar","pr","mifid ii","mifir","td","wphg","wpüg"]:
+            if a in s:
+                out.add(a)
+        return out or set(["(unspecified)"])
+
     for it in issues:
-        scopes = issue_scope_markers(it, _primary_aliases)
-        it["required"] = bool(primary & scopes)   # required if any inferred key matches this issue
-        it["scope_laws"] = sorted(scopes)         # keep for transparency/debug
-    
-    # DEBUG — remove after testing
-    st.write("PRIMARY SCOPE →", list(primary))
-    for it in issues[:5]:
-        st.write(it["name"], "| required:", it["required"], "| scopes:", it.get("scope_laws"))
+        scopes = issue_scope_markers(it)
+        it["required"] = bool(primary & scopes)  # required if intersects the primary regime(s)
+        it["scope_laws"] = sorted(scopes)        # keep for explanation/debug
     
     # Fallback to improved keyword extraction
     if not issues:

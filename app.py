@@ -1244,7 +1244,7 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
 # =======================
 
 def _json_only(messages, api_key,  model_name=None, max_tokens=700):
-    """Calls Groq and returns JSON-parsed dict/list or None. Reuses call_groq + _try_parse_json present in your app."""
+    model_name = model_name or SELECTED_MODEL
     raw = call_groq(messages, api_key=api_key, model_name=SELECTED_MODEL, temperature=0.0, max_tokens=max_tokens)
     return _try_parse_json(raw)
 

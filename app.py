@@ -1243,12 +1243,12 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
 # MODEL-CONSISTENCY GUARDRAIL (general, no question-specific logic)
 # =======================
 
-def _json_only(messages, api_key, model_name: str = None, max_tokens=700):
+def _json_only(messages, api_key,  model_name=None, max_tokens=700):
     """Calls Groq and returns JSON-parsed dict/list or None. Reuses call_groq + _try_parse_json present in your app."""
     raw = call_groq(messages, api_key=api_key, model_name=SELECTED_MODEL, temperature=0.0, max_tokens=max_tokens)
     return _try_parse_json(raw)
 
-def check_reply_vs_model_for_contradictions(model_answer: str, reply: str, api_key: str, model_name: str = None) -> dict:
+def check_reply_vs_model_for_contradictions(model_answer: str, reply: str, api_key: str,  model_name=None) -> dict:
     """
     Structured 'consistency critic' that flags contradictions between ASSISTANT_REPLY and MODEL_ANSWER.
     Returns: {"consistent": bool, "contradictions": [{"reply_span","model_basis","why","fix"}]}
@@ -1293,7 +1293,7 @@ def check_reply_vs_model_for_contradictions(model_answer: str, reply: str, api_k
 
     return {"consistent": not bool(clean), "contradictions": clean}
 
-def rewrite_reply_to_match_model(model_answer: str, reply: str, contradictions: list, api_key: str, model_name: str = None) -> str:
+def rewrite_reply_to_match_model(model_answer: str, reply: str, contradictions: list, api_key: str,  model_name=None) -> str:
     """
     Rewrites the reply to align with the MODEL_ANSWER.
     Preserves structure, ≤400 words, keeps existing [n] citations but does NOT invent new numbers.
@@ -1328,7 +1328,7 @@ def rewrite_reply_to_match_model(model_answer: str, reply: str, contradictions: 
     )
     return fixed or reply
 
-def enforce_model_consistency(reply: str, model_answer_filtered: str, api_key: str, model_name: str = None) -> str:
+def enforce_model_consistency(reply: str, model_answer_filtered: str, api_key: str,  model_name=None) -> str:
     """
     Detect → correct → (optionally) verify.
     If LLM unavailable or nothing to fix, returns original reply.
@@ -1610,7 +1610,7 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
     return top_pages, source_lines
 
 # ---------------- LLM via Groq (free) ----------------
-def call_groq(messages: List[Dict], api_key: str, model_name=SELECTED_MODEL,
+def call_groq(messages: List[Dict], api_key: str, model_name=None,
               temperature: float = 0.2, max_tokens: int = 700) -> str:
     """
     Groq OpenAI-compatible chat endpoint. Models like llama-3.1-8b-instant / 70b-instant are free.
@@ -1894,7 +1894,7 @@ def truncate_block(s: str, max_chars: int = 3600) -> str:
     s = s or ""
     return s if len(s) <= max_chars else (s[:max_chars] + " …")
 
-def generate_with_continuation(messages, api_key, model_name: str = None, temperature=0.2, first_tokens=2000, continue_tokens=600):
+def generate_with_continuation(messages, api_key,  model_name=None, temperature=0.2, first_tokens=2000, continue_tokens=600):
     """
     Calls the LLM, and if output ends mid-sentence, asks it to continue once.
     """

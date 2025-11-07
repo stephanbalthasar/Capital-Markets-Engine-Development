@@ -1343,7 +1343,7 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
     #        break
 
     # Order by key and build source lines. For booklet items we already have 'title' as a full citation line.
-    top_pages = [per_page[k] for k in sorted(per_page.keys())][:top_k_pages]
+    # top_pages = [per_page[k] for k in sorted(per_page.keys())][:top_k_pages]
 
     source_lines = []
     for i, tp in enumerate(top_pages):

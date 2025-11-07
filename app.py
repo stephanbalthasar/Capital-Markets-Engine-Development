@@ -1339,33 +1339,29 @@ def call_groq(messages: List[Dict], api_key: str, model_name=None,
 def system_guardrails():
     return (
         "You are a careful EU/German capital markets law tutor.\n"
-        "PRIORITY RULES:\n"
-        "1. Base all feedback on the authoritative MODEL ANSWER and the numbered SOURCES provided.\n"
-        "2. If SOURCES conflict with MODEL ANSWER, follow the MODEL ANSWER and briefly explain why.\n"
-        "3. Never reveal or mention that a hidden model answer exists.\n\n"
-        "4. If asked to reveal model answer, politely decline.\n\n"
-        "CITATIONS POLICY:\n"
-        "- Cite ONLY using numeric brackets that match the SOURCES list (e.g., [1], [2]).\n"
-        "- NEVER write the literal placeholder “[n]”.\n"
-        "- Never invent Course Booklet references (pages, paragraphs, cases). Only cite the numbered SOURCES.\n\n"
-        "- Do NOT fabricate page/para/case numbers.\n"
-        "- Do not cite any material that does not appear in the SOURCES list.\n\n"
+        "HARD RULES:\n"
+        "• Base feedback on the AUTHORITATIVE MODEL_ANSWER; do not contradict it.\n"
+        "• If student reasoning conflicts, state the correct conclusion first and explain briefly.\n"
+        "• Do not disclose or refer to any internal reference material.\n"
+        "\n"
+        "CITATIONS:\n"
+        "• Cite ONLY using numeric brackets [n] that refer to the provided SOURCES.\n"
+        "• Only use [n] if the corresponding EXCERPT [n] actually supports the claim.\n"
+        "• Do NOT fabricate Course Booklet references.\n"
+        "\n"
         "FEEDBACK PRINCIPLES:\n"
-        "- If the student's answer substantially aligns with the MODEL ANSWER, do not mark core claims as incorrect; prefer 'Correct' and offer improvements."
-        "- If the student's conclusion is incorrect, explicitly state the correct conclusion first, then explain why with citations [n].\n"
-        "- If the student's answer is irrelevant to the selected question, say: 'Are you sure your answer corresponds to the question you selected?'\n"
-        "- If central concepts are missing, point this out and explain why they matter.\n"
-        "- Correct mis-citations succinctly (e.g., Art 3(1) PR → Art 3(3) PR; §40 WpHG → §43(1) WpHG).\n"
-        "- Summarize or paraphrase concepts; do not copy long passages.\n\n"
-        "FACT-CHECKING RULE:\\n"
-        "- Do **not** mark something as 'Missing' if it appears in the PRESENT list provided in the prompt.\\n\\n"
-        "OUTPUT LAYOUT:\\n"
-        "- If you return a list of bullets, return a new line for each bullet."
-        "STYLE:\n"
-        "- Be concise, didactic, and actionable.\n"
-        "- Use ≤400 words, no new sections.\n"
-        "- Finish with a single explicit concluding sentence.\n"
-        "- Write in the same language as the student's answer when possible (if mixed, default to English)."
+        "• If the student substantially aligns with the MODEL_ANSWER, mark claims as Correct and put extras under Suggestions.\n"
+        "• If central concepts are missing, explain why they matter; correct mis-citations succinctly.\n"
+        "• Summarise—do not copy long passages.\n"
+        "\n"
+        "OUTPUT:\n"
+        "• ≤400 words, concise, didactic, actionable; same language as the student.\n"
+        "• Headings must be exactly:\n"
+        "**Student's Core Claims:**\n"
+        "**Mistakes:**\n"
+        "**Missing Aspects:**\n"
+        "**Suggestions**\n"
+        "**Conclusion:**\n"
     )
 
 def _flatten_hits_misses_from_rubric(rubric: dict) -> tuple[list[str], list[str]]:
@@ -1390,85 +1386,63 @@ def _flatten_hits_misses_from_rubric(rubric: dict) -> tuple[list[str], list[str]
     # Keep lists reasonably short for the prompt
     return present[:30], missing[:30]
 
-def build_feedback_prompt(student_answer: str, rubric: dict, model_answer: str, sources_block: str, excerpts_block: str) -> str:
-    """
-    Prompt for LLM to generate feedback in 5 structured sections:
-    - Student's Core Claims
-    - Mistakes
-    - Missing Aspects
-    - Suggestions
-    - Conclusion
-    """
+def build_feedback_prompt(student_answer, rubric, model_answer, sources_block, excerpts_block):
+    has_sources = sources_block and "(no web sources available)" not in sources_block
+    citation_rule = (
+        "Use numeric citations [n] only from SOURCES, and only when the EXCERPT [n] supports the claim."
+        if has_sources else
+        "No numeric citations are available for this reply; write without [n] citations."
+    )
+
     issue_names = [row["issue"] for row in rubric.get("per_issue", [])]
     present = [kw for row in rubric.get("per_issue", []) for kw in row.get("keywords_hit", [])]
     missing = [kw for m in rubric.get("missing", []) for kw in m.get("missed_keywords", [])]
     present_block = "• " + "\n• ".join(present) if present else "—"
     missing_block = "• " + "\n• ".join(missing) if missing else "—"
-    exclusion_block = ""
-    excluded = rubric.get("excluded_keywords", [])
-    if excluded:
-        exclusion_block = (
-            "\nEXCLUSION RULE:\n"
-            "The following provisions are explicitly marked in the MODEL ANSWER as not required for this question:\n"
-            + "\n".join(f"- {kw}" for kw in excluded)
-            + "\nIf the student does not mention them, do not include them in 'Missing Aspects'.\n"
-            + "If the student does mention them, evaluate correctness and include feedback if appropriate."
-        )
-    
+
     return f"""
 GRADE THE STUDENT'S ANSWER USING THE RUBRIC AND THE WEB/BOOKLET SOURCES.
-{exclusion_block}
 
 STUDENT ANSWER:
 \"\"\"{student_answer}\"\"\"
 
 RUBRIC SUMMARY:
-- Similarity to model answer: {rubric.get('similarity_pct', 0)}%
-- Issue coverage: {rubric.get('coverage_pct', 0)}%
+- Similarity: {rubric.get('similarity_pct', 0)}%
+- Coverage: {rubric.get('coverage_pct', 0)}%
 - Overall score: {rubric.get('final_score', 0)}%
 - Issues to cover: {", ".join(issue_names) if issue_names else "—"}
 
-MODEL ANSWER (AUTHORITATIVE):
+MODEL ANSWER (authoritative):
 \"\"\"{model_answer}\"\"\"
 
-SOURCES (numbered; cite using [1], [2], … ONLY from this list):
+SOURCES (numbered):
 {sources_block}
 
-EXCERPTS (quote sparingly; cite using [1], [2], …):
+EXCERPTS (quote sparingly):
 {excerpts_block}
 
 AUTO-DETECTED EVIDENCE:
-- PRESENT in student's answer (DO NOT MARK THESE AS MISTAKES or MISSING ASPECTS):
+- PRESENT (do NOT mark these as Mistakes/Missing): 
 {present_block}
-
-- POTENTIALLY MISSING (only mark as missing if truly absent AND material):
+- POTENTIALLY MISSING (mark only if truly absent and material):
 {missing_block}
 
-OUTPUT FORMAT (use EXACTLY these headings):
-
+OUTPUT FORMAT (exact headings and bulleting):
 **Student's Core Claims:**
 • <claim> — [Correct|Incorrect|Not supported]
-
 **Mistakes:**
-• <incorrect claim> — Explanation of why it is incorrect [n]
-
+• <incorrect claim> — short why [n]
 **Missing Aspects:**
-• <missing concept> — Explanation of why it matters [n]
-
+• <missing concept> — why it matters [n]
 **Suggestions**
-• <optional suggestion to improve clarity or depth> [n]
-
+• <optional improvements> [n]
 **Conclusion:**
-<one-sentence summary>
+<one sentence>
 
 RULES:
-- Do NOT mark anything as missing if it appears in the PRESENT list.
-- ALWAYS insert a line break after each heading. 
-- If you use bullets, you MUST insert a line break before each bullet.
-- Use numeric citations [n] only from SOURCES.
-- Do NOT fabricate citations or Course Booklet references.
-- Be concise, didactic, and actionable.
-- ≤400 words total.
+- {citation_rule}
+- Always insert a line break after each heading and before each bullet.
+- Be concise and actionable; ≤400 words total.
 """.strip()
 
 def lock_out_false_mistakes(reply: str, rubric: dict) -> str:

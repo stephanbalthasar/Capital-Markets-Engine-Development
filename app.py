@@ -688,8 +688,6 @@ def generate_rubric_from_model_answer(student_answer: str, model_answer: str, ba
         got += sc
         per_issue.append({
             "issue": issue["name"],
-            "required": issue.get("required", True),          # <-- carry through
-            "scope_laws": issue.get("scope_laws", []),        # <-- carry through
             "max_points": pts,
             "score": sc,
             "keywords_hit": hits,
@@ -702,8 +700,6 @@ def generate_rubric_from_model_answer(student_answer: str, model_answer: str, ba
     # Only required issues can be marked as "missing"
     missing = []
     for row in per_issue:
-        if not row.get("required", True):
-            continue  # <-- optional issues are never missing
         missed = [kw for kw in row["keywords_total"] if not keyword_present(student_answer, kw)]
         if missed:
             missing.append({"issue": row["issue"], "missed_keywords": missed})

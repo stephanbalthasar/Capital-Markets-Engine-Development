@@ -1942,6 +1942,7 @@ with colA:
                 display_source_lines = filter_sources_by_indices(source_lines, used_idxs) or source_lines
             
                 if reply:
+                    reply = re.sub(r"(?<!\n)•", r"\n•", reply)
                     st.markdown(reply)
                 else:
                     st.info("LLM unavailable. See corrections above and the issue breakdown.")

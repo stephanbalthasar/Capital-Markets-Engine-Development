@@ -1304,7 +1304,7 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
     idx = np.argsort(sims)[::-1]
 
     # ✅ Similarity floor to keep only reasonably relevant snippets
-    MIN_SIM = 0.15
+    MIN_SIM = 0.22  # tune if needed
 
     # ---- Select top snippets grouped by (booklet page) or (web page index)
     per_page = {}
@@ -1743,28 +1743,6 @@ with st.sidebar:
     SELECTED_MODEL = model_name
     temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.05)
 
-
-    # --- Sidebar: 📌 Prompted Booklet Chunks with Similarity Scores ---
-    st.divider()
-    st.subheader("📌 Prompted Booklet Chunks")
-    
-        selected_chunks = st.session_state.get("selected_booklet_chunks", [])
-        selected_metas = st.session_state.get("selected_booklet_metas", [])
-        selected_sims = st.session_state.get("selected_booklet_similarities", [])
-        
-    if selected_chunks and selected_metas and selected_sims:
-        for meta, chunk, sim in zip(selected_metas, selected_chunks, selected_sims):
-            if meta.get("paras"):
-                label = f"para {meta['paras'][0]}"
-            elif meta.get("cases"):
-                label = f"Case Study {meta['cases'][0]}"
-            else:
-                label = "—"
-            preview = " ".join(chunk.split()[:12]) + "…" if chunk else "—"
-            st.markdown(f"- **{label}** — {preview} _(sim: {sim:.2f})_")
-    else:
-        st.info("No booklet chunks selected yet.")
-        
     st.header("🌐 Web Retrieval")
     enable_web = st.checkbox("Enable web grounding", value=True)
     max_sources = st.slider("Max sources to cite", 3, 10, 6, 1)
@@ -1898,15 +1876,7 @@ with colA:
                         student_answer, model_answer_filtered, pages, backend, extracted_keywords,
                         user_query="", top_k_pages=max_sources, chunk_words=170
                     )
-            # Always store selected booklet chunks for diagnostics
-            booklet_chunks_only = [snip for tp in top_pages if tp["url"].startswith("booklet://course-booklet") for snip in tp["snippets"]]
-            booklet_metas_only = [tp for tp in top_pages if tp["url"].startswith("booklet://course-booklet")]
-            booklet_sims = [round(cos_sim(embed_texts([student_answer], backend)[0], embed_texts([snip], backend)[0]), 3) for snip in booklet_chunks_only]
-            
-            st.session_state["selected_booklet_chunks"] = booklet_chunks_only
-            st.session_state["selected_booklet_metas"] = [meta for meta in booklet_metas_only for _ in range(len(meta["snippets"]))]
-            st.session_state["selected_booklet_similarities"] = booklet_sims
-
+                    
             # Breakdown
             with st.expander("🔬 Issue-by-issue breakdown"):
                 for row in rubric["per_issue"]:

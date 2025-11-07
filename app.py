@@ -1304,7 +1304,7 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
     idx = np.argsort(sims)[::-1]
 
     # ✅ Similarity floor to keep only reasonably relevant snippets
-    MIN_SIM = 0.22  # tune if needed
+    MIN_SIM = 0.15
 
     # ---- Select top snippets grouped by (booklet page) or (web page index)
     per_page = {}

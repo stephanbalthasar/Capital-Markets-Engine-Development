@@ -1341,15 +1341,15 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
     # Order by key and build source lines. For booklet items we already have 'title' as a full citation line.
     # top_pages = [per_page[k] for k in sorted(per_page.keys())][:top_k_pages]
 
-    source_lines = []
-    for i, tp in enumerate(top_pages):
-        if tp["url"].startswith("booklet://"):
-            # already a fully formatted citation like: "Course Booklet — p. ii (PDF p. 4), para. 115"
-            source_lines.append(f"[{i+1}] {tp['title']}")
-        else:
-            source_lines.append(f"[{i+1}] {tp['title']} — {tp['url']}")
+    #source_lines = []
+    #for i, tp in enumerate(top_pages):
+    #    if tp["url"].startswith("booklet://"):
+    #        # already a fully formatted citation like: "Course Booklet — p. ii (PDF p. 4), para. 115"
+    #        source_lines.append(f"[{i+1}] {tp['title']}")
+    #    else:
+    #        source_lines.append(f"[{i+1}] {tp['title']} — {tp['url']}")
 
-    return top_pages, source_lines
+    #return top_pages, source_lines
 
 # ---------------- LLM via Groq (free) ----------------
 def call_groq(messages: List[Dict], api_key: str, model_name=None,

@@ -1898,13 +1898,14 @@ with colA:
                         student_answer, model_answer_filtered, pages, backend, extracted_keywords,
                         user_query="", top_k_pages=max_sources, chunk_words=170
                     )
-            # Store selected booklet chunks for diagnostics
+            # Always store selected booklet chunks for diagnostics
             booklet_chunks_only = [snip for tp in top_pages if tp["url"].startswith("booklet://course-booklet") for snip in tp["snippets"]]
             booklet_metas_only = [tp for tp in top_pages if tp["url"].startswith("booklet://course-booklet")]
             booklet_sims = [round(cos_sim(embed_texts([student_answer], backend)[0], embed_texts([snip], backend)[0]), 3) for snip in booklet_chunks_only]
             
             st.session_state["selected_booklet_chunks"] = booklet_chunks_only
             st.session_state["selected_booklet_metas"] = [meta for meta in booklet_metas_only for _ in range(len(meta["snippets"]))]
+            st.session_state["selected_booklet_similarities"] = booklet_sims
 
             # Breakdown
             with st.expander("🔬 Issue-by-issue breakdown"):

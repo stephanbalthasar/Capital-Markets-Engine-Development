@@ -1748,10 +1748,10 @@ with st.sidebar:
     st.divider()
     st.subheader("📌 Prompted Booklet Chunks")
     
-    selected_chunks = st.session_state.get("selected_booklet_chunks", [])
-    selected_metas = st.session_state.get("selected_booklet_metas", [])
-    selected_sims = st.session_state.get("selected_booklet_similarities", [])
-    
+        selected_chunks = st.session_state.get("selected_booklet_chunks", [])
+        selected_metas = st.session_state.get("selected_booklet_metas", [])
+        selected_sims = st.session_state.get("selected_booklet_similarities", [])
+        
     if selected_chunks and selected_metas and selected_sims:
         for meta, chunk, sim in zip(selected_metas, selected_chunks, selected_sims):
             if meta.get("paras"):

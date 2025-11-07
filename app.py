@@ -1350,7 +1350,7 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
     #    else:
     #        source_lines.append(f"[{i+1}] {tp['title']} — {tp['url']}")
 
-    #return top_pages, source_lines
+    return top_pages, source_lines
 
 # ---------------- LLM via Groq (free) ----------------
 def call_groq(messages: List[Dict], api_key: str, model_name=None,

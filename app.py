@@ -1937,7 +1937,6 @@ with colA:
                 reply = lock_out_false_missing(reply, rubric)
                 reply = format_feedback_and_filter_missing(reply, student_answer, model_answer_filtered, rubric)
                 reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
-                reply = re.sub(r"(?<!\n)•", r"\n•", reply)
                 
                 used_idxs = parse_cited_indices(reply)
                 display_source_lines = filter_sources_by_indices(source_lines, used_idxs) or source_lines

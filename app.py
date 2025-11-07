@@ -1314,7 +1314,8 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
           
     # Filter out low-similarity chunks
     filtered_idx = [j for j in np.argsort(sims)[::-1] if sims[j] >= MIN_SIM]
-    
+    top_pages = []
+    source_lines = []
     # Select top_k most relevant chunks
     top_k = 24
     for i, j in enumerate(filtered_idx[:top_k]):

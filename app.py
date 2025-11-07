@@ -796,9 +796,6 @@ def detect_substantive_flags(answer: str) -> List[str]:
         flags.append("Delay under Art 17(4) MAR is conditional: (a) legitimate interest, (b) not misleading, (c) confidentiality ensured.")
     return flags
 
-# =======================
-# AGREEMENT MODE + TAG NORMALISATION (general, scalable)
-# =======================
 def _find_section(text: str, title_regex: str):
     """
     Return (head, body, tail, span) for the section whose title matches title_regex.

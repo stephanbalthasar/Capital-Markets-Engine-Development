@@ -1307,48 +1307,28 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
     MIN_SIM = 0.22  # tune if needed
 
     # ---- Select top snippets grouped by (booklet page) or (web page index)
-        # Compute similarity scores
-    embs = embed_texts([query] + all_chunks, backend)
-    qv, cvs = embs[0], embs[1:]
-    sims = [cos_sim(qv, v) for v in cvs]
-          
-    # Filter out low-similarity chunks
-    filtered_idx = [j for j in np.argsort(sims)[::-1] if sims[j] >= MIN_SIM]
-    top_pages = []
-    source_lines = []
-    # Select top_k most relevant chunks
-    top_k = 24
-    for i, j in enumerate(filtered_idx[:top_k]):
-        chunk = all_chunks[j]
+    per_page = {}
+    for j in idx:
+        if sims[j] < MIN_SIM:
+            break
         pi, url, title = all_meta[j]
-        top_pages.append({"url": url, "title": title, "snippets": [chunk]})
-        if url.startswith("booklet://"):
-            source_lines.append(f"[{i+1}] {title}")
-        else:
-            source_lines.append(f"[{i+1}] {title} — {url}")
-        
-    #per_page = {}
-    #for j in idx:
-    #    if sims[j] < MIN_SIM:
-    #        break
-    #    pi, url, title = all_meta[j]
-    #    snip = all_chunks[j]
-    #    arr = per_page.setdefault(pi, {"url": url, "title": title, "snippets": []})
-    #    if len(arr["snippets"]) < 3:
-    #        arr["snippets"].append(snip)
-    #    if len(per_page) >= top_k_pages:
-    #        break
+        snip = all_chunks[j]
+        arr = per_page.setdefault(pi, {"url": url, "title": title, "snippets": []})
+        if len(arr["snippets"]) < 3:
+            arr["snippets"].append(snip)
+        if len(per_page) >= top_k_pages:
+            break
 
     # Order by key and build source lines. For booklet items we already have 'title' as a full citation line.
-    # top_pages = [per_page[k] for k in sorted(per_page.keys())][:top_k_pages]
+    top_pages = [per_page[k] for k in sorted(per_page.keys())][:top_k_pages]
 
-    #source_lines = []
-    #for i, tp in enumerate(top_pages):
-    #    if tp["url"].startswith("booklet://"):
-    #        # already a fully formatted citation like: "Course Booklet — p. ii (PDF p. 4), para. 115"
-    #        source_lines.append(f"[{i+1}] {tp['title']}")
-    #    else:
-    #        source_lines.append(f"[{i+1}] {tp['title']} — {tp['url']}")
+    source_lines = []
+    for i, tp in enumerate(top_pages):
+        if tp["url"].startswith("booklet://"):
+            # already a fully formatted citation like: "Course Booklet — p. ii (PDF p. 4), para. 115"
+            source_lines.append(f"[{i+1}] {tp['title']}")
+        else:
+            source_lines.append(f"[{i+1}] {tp['title']} — {tp['url']}")
 
     return top_pages, source_lines
 
@@ -1782,19 +1762,7 @@ with st.sidebar:
             st.code((r.text or "")[:1000], language="json")
         except Exception as e:
             st.exception(e)
-    
-    # Diagnostic: Show retained chunks from feedback generation
-    st.divider()
-    st.subheader("🧠 Retained Chunks (Booklet + Web)")
-    
-    if "top_pages" in st.session_state:
-        for i, page in enumerate(st.session_state["top_pages"], start=1):
-            st.markdown(f"**[{i}] {page['title']}**")
-            for snip in page.get("snippets", []):
-                st.markdown(f"- {snip[:180]}{'...' if len(snip) > 180 else ''}")
-    else:
-        st.info("No retained chunks available yet. Generate feedback first.")
-                  
+
     # --- Sidebar: Booklet Inspector (Word) ---
     st.divider()
     st.subheader("📄 Booklet Inspector")
@@ -1908,8 +1876,7 @@ with colA:
                         student_answer, model_answer_filtered, pages, backend, extracted_keywords,
                         user_query="", top_k_pages=max_sources, chunk_words=170
                     )
-                st.session_state["top_pages"] = top_pages
-                
+                    
             # Breakdown
             with st.expander("🔬 Issue-by-issue breakdown"):
                 for row in rubric["per_issue"]:

@@ -1153,30 +1153,50 @@ def fetch_url(url: str) -> Dict:
     except Exception:
         return {"url": url, "title": url, "text": ""}
 
-def build_queries(student_answer: str, extra_user_q: str = "") -> List[str]:
-    base = [
-        "Article 17 MAR delay disclosure ESMA guidelines site:eur-lex.europa.eu OR site:esma.europa.eu OR site:bafin.de",
-        "Article 7(2) MAR precise information intermediate step Lafonta site:curia.europa.eu OR site:eur-lex.europa.eu",
-        "Prospectus Regulation 2017/1129 Article 3(3) admission prospectus requirement site:eur-lex.europa.eu",
-        "Prospectus Regulation Article 1(5)(a) 20% exemption site:eur-lex.europa.eu",
-        "Prospectus Regulation Article 6(1) information Article 16(1) risk factors site:eur-lex.europa.eu",
-        "MiFID II Article 4(1)(44) transferable securities site:eur-lex.europa.eu",
-        "WpHG § 33 § 34(2) acting in concert gemeinschaftliches Handeln site:gesetze-im-internet.de OR site:bafin.de",
-        "WpHG § 43 Abs 1 Absichtserklärung site:gesetze-im-internet.de OR site:bafin.de",
-        "WpHG § 44 Rechte ruhen Sanktion site:gesetze-im-internet.de OR site:bafin.de",
-        "WpÜG § 29 § 30 Kontrolle 30 Prozent acting in concert site:gesetze-im-internet.de OR site:bafin.de",
-        "WpÜG § 35 Pflichtangebot Veröffentlichung BaFin site:gesetze-im-internet.de OR site:bafin.de",
-        "WpÜG § 59 Ruhen von Rechten site:gesetze-im-internet.de OR site:bafin.de",
+def build_queries(student_answer: str, extracted_keywords: List[str], extra_user_q: str = "") -> List[str]:
+    """
+    Dynamically builds search queries for legal sources based on extracted keywords and user input.
+    Targets EUR-Lex, CURIA, BaFin, ESMA, Gesetze-im-Internet.
+
+    Args:
+        student_answer (str): The student's written answer.
+        extracted_keywords (List[str]): Keywords extracted from the model answer or rubric.
+        extra_user_q (str): Optional follow-up question from the user.
+
+    Returns:
+        List[str]: A list of search queries suitable for DuckDuckGo.
+    """
+    base_queries = []
+    legal_domains = [
+        "site:eur-lex.europa.eu",
+        "site:curia.europa.eu",
+        "site:esma.europa.eu",
+        "site:bafin.de",
+        "site:gesetze-im-internet.de"
     ]
+    # Clean and normalize keywords
+    keywords = [kw.strip() for kw in extracted_keywords if kw and len(kw.strip()) >= 3]
+    keywords = list(dict.fromkeys(keywords))[:20]  # deduplicate and cap
+
+    # Build queries from keywords
+    for kw in keywords:
+        for domain in legal_domains:
+            base_queries.append(f"{kw} {domain}")
+
+    # Add student answer context if available
     if student_answer:
-        base.append(f"({student_answer[:300]}) Neon Unicorn CFA MAR PR WpHG WpÜG site:eur-lex.europa.eu OR site:gesetze-im-internet.de")
+        context_snippet = student_answer[:300].strip().replace("\n", " ")
+        base_queries.append(f"({context_snippet}) {' OR '.join(legal_domains)}")
+
+    # Add extra user question if provided
     if extra_user_q:
-        base.append(extra_user_q + " site:eur-lex.europa.eu OR site:gesetze-im-internet.de OR site:curia.europa.eu OR site:esma.europa.eu OR site:bafin.de")
-    return base
+        base_queries.append(f"{extra_user_q.strip()} {' OR '.join(legal_domains)}")
+
+    return base_queries
 
 def collect_corpus(student_answer: str, extra_user_q: str, max_fetch: int = 20) -> List[Dict]:
     results = [{"title": "", "url": u} for u in SEED_URLS]
-    for q in build_queries(student_answer, extra_user_q):
+    for q in build_queries(student_answer, extracted_keywords, extra_user_q):
         results.extend(duckduckgo_search(q, max_results=5))
     seen, cleaned = set(), []
     for r in results:

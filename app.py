@@ -1311,15 +1311,13 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
     embs = embed_texts([query] + all_chunks, backend)
     qv, cvs = embs[0], embs[1:]
     sims = [cos_sim(qv, v) for v in cvs]
+          
+    # Filter out low-similarity chunks
+    filtered_idx = [j for j in np.argsort(sims)[::-1] if sims[j] >= MIN_SIM]
     
-    # Sort all chunks by similarity
-    top_k = 24  # or whatever number you want
-    idx = np.argsort(sims)[::-1][:top_k]
-    
-    # Build top pages list directly
-    top_pages = []
-    source_lines = []
-    for i, j in enumerate(idx):
+    # Select top_k most relevant chunks
+    top_k = 24
+    for i, j in enumerate(filtered_idx[:top_k]):
         chunk = all_chunks[j]
         pi, url, title = all_meta[j]
         top_pages.append({"url": url, "title": title, "snippets": [chunk]})
@@ -1327,9 +1325,7 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
             source_lines.append(f"[{i+1}] {title}")
         else:
             source_lines.append(f"[{i+1}] {title} — {url}")
-    
-    
-    
+        
     #per_page = {}
     #for j in idx:
     #    if sims[j] < MIN_SIM:
@@ -1911,7 +1907,8 @@ with colA:
                         student_answer, model_answer_filtered, pages, backend, extracted_keywords,
                         user_query="", top_k_pages=max_sources, chunk_words=170
                     )
-                    
+                st.session_state["top_pages"] = top_pages
+                
             # Breakdown
             with st.expander("🔬 Issue-by-issue breakdown"):
                 for row in rubric["per_issue"]:

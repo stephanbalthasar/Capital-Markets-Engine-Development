@@ -1743,13 +1743,14 @@ with st.sidebar:
     SELECTED_MODEL = model_name
     temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.05)
 
-        # --- Sidebar: 📌 Prompted Booklet Chunks with Similarity Scores ---
-        st.divider()
-        st.subheader("📌 Prompted Booklet Chunks")
-        
-        selected_chunks = st.session_state.get("selected_booklet_chunks", [])
-        selected_metas = st.session_state.get("selected_booklet_metas", [])
-        selected_sims = st.session_state.get("selected_booklet_similarities", [])
+
+    # --- Sidebar: 📌 Prompted Booklet Chunks with Similarity Scores ---
+    st.divider()
+    st.subheader("📌 Prompted Booklet Chunks")
+    
+    selected_chunks = st.session_state.get("selected_booklet_chunks", [])
+    selected_metas = st.session_state.get("selected_booklet_metas", [])
+    selected_sims = st.session_state.get("selected_booklet_similarities", [])
     
     if selected_chunks and selected_metas and selected_sims:
         for meta, chunk, sim in zip(selected_metas, selected_chunks, selected_sims):
@@ -1762,7 +1763,8 @@ with st.sidebar:
             preview = " ".join(chunk.split()[:12]) + "…" if chunk else "—"
             st.markdown(f"- **{label}** — {preview} _(sim: {sim:.2f})_")
     else:
-    
+        st.info("No booklet chunks selected yet.")
+        
     st.header("🌐 Web Retrieval")
     enable_web = st.checkbox("Enable web grounding", value=True)
     max_sources = st.slider("Max sources to cite", 3, 10, 6, 1)

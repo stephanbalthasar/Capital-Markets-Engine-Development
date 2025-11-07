@@ -796,6 +796,36 @@ def detect_substantive_flags(answer: str) -> List[str]:
         flags.append("Delay under Art 17(4) MAR is conditional: (a) legitimate interest, (b) not misleading, (c) confidentiality ensured.")
     return flags
 
+# =======================
+# AGREEMENT MODE + TAG NORMALISATION (general, scalable)
+# =======================
+
+def in_agreement_mode(rubric: dict, sim_thresh: float = 85.0, cov_thresh: float = 70.0) -> bool:
+    """
+    True if the student's answer is highly aligned with the model answer.
+    Uses your rubric similarity & coverage (already computed).
+    """
+    try:
+        return (rubric or {}).get("similarity_pct", 0.0) >= sim_thresh and \
+               (rubric or {}).get("coverage_pct", 0.0) >= cov_thresh
+    except Exception:
+        return False
+def agreement_prompt_prelude(agreement: bool) -> str:
+    """
+    Guidance injected into the LLM prompt so it frames extras as Suggestions,
+    never as errors, when the answer is aligned.
+    """
+    if not agreement:
+        return ""
+    return (
+        "IMPORTANT RULES (agreement mode):\n"
+        "- If the student's claim matches the MODEL ANSWER, label it \"Correct\".\n"
+        "- If you want to add extra legal points (other provisions, edge cases, policy), put them under a section titled "
+        "\"Suggestions\" (or \"Further Considerations\"). Do NOT put them under 'Mistakes'.\n"
+        "- Never mark a claim as 'Incorrect' unless it directly contradicts the MODEL ANSWER.\n\n"
+    )
+
+
 def _find_section(text: str, title_regex: str):
     """
     Return (head, body, tail, span) for the section whose title matches title_regex.
@@ -809,6 +839,64 @@ def _find_section(text: str, title_regex: str):
     if not m:
         return None, None, None, None
     return m.group(1), m.group(2), m.group(3), m.span(0)
+
+def _neutralise_error_tone(line: str) -> str:
+    """
+    Turn blamey phrasing into 'suggestion' tone.
+    """
+    s = line
+    s = re.sub(r"\b[Tt]he student incorrectly (states|assumes|concludes)\b", "Consider also", s)
+    s = re.sub(r"\b[Tt]his is incorrect because\b", "Rationale:", s)
+    s = s.replace("is incorrect", "may be incomplete")
+    return s
+
+
+def merge_to_suggestions(reply: str, student_answer: str, activate: bool = True) -> str:
+    """
+    When activated (agreement mode), remove 'Mistakes' and 'Missing Aspects'
+    sections and merge their content into a neutral 'Suggestions:' section.
+    """
+    if not reply or not activate:
+        return reply
+
+    # 1) Extract both sections (if any)
+    inc_head, inc_body, inc_tail, inc_span = _find_section(reply, r"Mistakes:")
+    mis_head, mis_body, mis_tail, mis_span = _find_section(reply, r"Missing Aspects:")
+
+    if not any([inc_head, mis_head]):
+        return reply
+
+    # 2) Build a combined suggestions list
+    suggestions = []
+    suggestions += [f"• {ln.strip()}" for ln in (inc_body or "").splitlines() if ln.strip()]
+    suggestions += [f"• {ln.strip()}" for ln in (mis_body or "").splitlines() if ln.strip()]
+    suggestions = [_neutralise_error_tone(s) for s in suggestions]
+    # Keep short, informative suggestions
+    suggestions = suggestions[:8]
+
+    # 3) Remove original sections by cutting spans (from end to start)
+    parts = []
+    last = 0
+    cut_spans = []
+    if inc_span: cut_spans.append(inc_span)
+    if mis_span: cut_spans.append(mis_span)
+    for s, e in sorted(cut_spans):
+        parts.append(reply[last:s])
+        last = e
+    parts.append(reply[last:])
+    tmp = "".join(parts)
+
+    # 4) Insert Suggestions before Conclusion
+    suggestions_block = ""
+    if suggestions:
+        suggestions_block = "Suggestions:\n" + "\n".join(suggestions) + "\n\n"
+    concl_sec = re.search(r"\n(?=Conclusion\b)", tmp, flags=re.I)
+    if concl_sec:
+        idx = concl_sec.start()
+        return tmp[:idx] + "\n" + suggestions_block + tmp[idx:]
+    # else append at end
+    return (tmp.rstrip() + "\n\n" + suggestions_block).rstrip() + "\n"
+
 
 def tidy_empty_sections(reply: str) -> str:
     """
@@ -1723,6 +1811,9 @@ with colA:
                     DEFAULT_WEIGHTS
                 )
 
+                agreement = in_agreement_mode(rubric)
+                prelude = agreement_prompt_prelude(agreement)
+                
                 top_pages, source_lines = [], []
                 if enable_web:
                     pages = collect_corpus(student_answer, "", max_fetch=22)
@@ -1768,7 +1859,7 @@ with colA:
             
                 messages = [
                     {"role": "system", "content": system_guardrails()},
-                    {"role": "user", "content": hard_rule + build_feedback_prompt(
+                    {"role": "user", "content": prelude + hard_rule + build_feedback_prompt(
                         student_answer, rubric, model_answer_filtered, sources_block, excerpts_block
                     )},
                 ]
@@ -1783,6 +1874,7 @@ with colA:
                     api_key,
                     model_name,
                 )
+                reply = merge_to_suggestions(reply, student_answer, activate=agreement)
                 reply = tidy_empty_sections(reply)
                 reply = prune_redundant_improvements(student_answer, reply, rubric)
                 reply = lock_out_false_mistakes(reply, rubric)
@@ -1882,6 +1974,11 @@ with colB:
                     model_name,    
                 )
 
+                msgs.append({"role": "system", "content":
+                    "When the student's view aligns with the MODEL ANSWER, avoid marking claims as incorrect; "
+                    "present extra provisions and edge cases under a short 'Suggestions' or 'Further Considerations' section."
+                })
+                
                 # cleanup + source filtering remain unchanged
                 reply = re.sub(r"\[(?:n|N)\]", "", reply or "")
                 used_idxs = parse_cited_indices(reply)

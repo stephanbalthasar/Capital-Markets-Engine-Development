@@ -1307,17 +1307,40 @@ def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages,
     MIN_SIM = 0.22  # tune if needed
 
     # ---- Select top snippets grouped by (booklet page) or (web page index)
-    per_page = {}
-    for j in idx:
-        if sims[j] < MIN_SIM:
-            break
+        # Compute similarity scores
+    embs = embed_texts([query] + all_chunks, backend)
+    qv, cvs = embs[0], embs[1:]
+    sims = [cos_sim(qv, v) for v in cvs]
+    
+    # Sort all chunks by similarity
+    top_k = 24  # or whatever number you want
+    idx = np.argsort(sims)[::-1][:top_k]
+    
+    # Build top pages list directly
+    top_pages = []
+    source_lines = []
+    for i, j in enumerate(idx):
+        chunk = all_chunks[j]
         pi, url, title = all_meta[j]
-        snip = all_chunks[j]
-        arr = per_page.setdefault(pi, {"url": url, "title": title, "snippets": []})
-        if len(arr["snippets"]) < 3:
-            arr["snippets"].append(snip)
-        if len(per_page) >= top_k_pages:
-            break
+        top_pages.append({"url": url, "title": title, "snippets": [chunk]})
+        if url.startswith("booklet://"):
+            source_lines.append(f"[{i+1}] {title}")
+        else:
+            source_lines.append(f"[{i+1}] {title} — {url}")
+    
+    
+    
+    #per_page = {}
+    #for j in idx:
+    #    if sims[j] < MIN_SIM:
+    #        break
+    #    pi, url, title = all_meta[j]
+    #    snip = all_chunks[j]
+    #    arr = per_page.setdefault(pi, {"url": url, "title": title, "snippets": []})
+    #    if len(arr["snippets"]) < 3:
+    #        arr["snippets"].append(snip)
+    #    if len(per_page) >= top_k_pages:
+    #        break
 
     # Order by key and build source lines. For booklet items we already have 'title' as a full citation line.
     top_pages = [per_page[k] for k in sorted(per_page.keys())][:top_k_pages]
@@ -1762,7 +1785,19 @@ with st.sidebar:
             st.code((r.text or "")[:1000], language="json")
         except Exception as e:
             st.exception(e)
-
+    
+    # Diagnostic: Show retained chunks from feedback generation
+    st.divider()
+    st.subheader("🧠 Retained Chunks (Booklet + Web)")
+    
+    if "top_pages" in st.session_state:
+        for i, page in enumerate(st.session_state["top_pages"], start=1):
+            st.markdown(f"**[{i}] {page['title']}**")
+            for snip in page.get("snippets", []):
+                st.markdown(f"- {snip[:180]}{'...' if len(snip) > 180 else ''}")
+    else:
+        st.info("No retained chunks available yet. Generate feedback first.")
+                  
     # --- Sidebar: Booklet Inspector (Word) ---
     st.divider()
     st.subheader("📄 Booklet Inspector")

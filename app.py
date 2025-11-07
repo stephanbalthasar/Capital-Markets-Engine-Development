@@ -378,24 +378,6 @@ def normalize_headings(text: str) -> str:
 
     return text
 
-def add_good_catch_for_optionals(reply: str, rubric: dict) -> str:
-    bonus = rubric.get("bonus") or []
-    if not reply or not bonus:
-        return reply
-
-    bullets = []
-    for b in bonus[:3]:  # keep it tight
-        name = b.get("issue") or "Additional point"
-        bullets.append(f"• Good catch: {name} — correct, but optional for this question.")
-
-    # Accept **Suggestions** with or without colon; normalise to with-colon
-    suggestions_hdr = re.compile(r"(?im)^\s*\*\*Suggestions\*\*:?\s*$")
-    if suggestions_hdr.search(reply):
-        reply = suggestions_hdr.sub("**Suggestions**:\n" + "\n".join(bullets) + "\n", reply, count=1)
-    else:
-        reply = reply.rstrip() + "\n\n**Suggestions**:\n" + "\n".join(bullets) + "\n"
-    return reply
-
 # --- Grounding guard helpers (add once) ---
 def _anchors_from_model(model_answer_slice: str, cap: int = 20) -> list[str]:
     s = model_answer_slice or ""
@@ -713,14 +695,7 @@ def generate_rubric_from_model_answer(student_answer: str, model_answer: str, ba
             "keywords_hit": hits,
             "keywords_total": issue["keywords"],
         })
-        # "Good catch" for optional issues the student actually covered
-        if not issue.get("required", True) and hits:
-            bonus.append({
-                "issue": issue["name"],
-                "hits": hits,
-                "scope_laws": issue.get("scope_laws", []),
-            })
-
+        
     cov_pct = 100.0 * got / max(1, tot)
     final = (weights["similarity"] * sim_pct + weights["coverage"] * cov_pct) / (weights["similarity"] + weights["coverage"])
 
@@ -1931,7 +1906,6 @@ with colA:
                 )
                 reply = merge_to_suggestions(reply, student_answer, activate=agreement)
                 reply = tidy_empty_sections(reply)
-                reply = add_good_catch_for_optionals(reply, rubric) 
                 reply = prune_redundant_improvements(student_answer, reply, rubric)
                 reply = lock_out_false_mistakes(reply, rubric)
                 reply = lock_out_false_missing(reply, rubric)

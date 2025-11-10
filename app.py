@@ -13,8 +13,12 @@ import pathlib
 import re
 import requests
 import streamlit as st
+import time
+
+
 
 from bs4 import BeautifulSoup
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from docx import Document
 from docx.text.paragraph import Paragraph
 from docx.table import Table, _Cell
@@ -353,6 +357,10 @@ def load_booklet_anchors(docx_source: Union[str, IO[bytes]]) -> Tuple[List[Dict[
 ## ---------------------------------------------------------------------------------------------
 
 # ---------- Public helpers you will call from the app ----------
+def _time_budget(seconds: float):
+    start = time.monotonic()
+    return lambda: time.monotonic() - start < seconds
+
 def normalize_headings(text: str) -> str:
     """Standardize and bold section headings."""
     if not text:
@@ -1011,7 +1019,7 @@ UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, 
 def duckduckgo_search(query: str, max_results: int = 6) -> List[Dict]:
     url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
     try:
-        r = requests.get(url, headers=UA, timeout=20)
+        r = requests.get(url, headers=UA, timeout=6)
         r.raise_for_status()
     except Exception:
         return []
@@ -1032,7 +1040,7 @@ def duckduckgo_search(query: str, max_results: int = 6) -> List[Dict]:
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_url(url: str) -> Dict:
     try:
-        r = requests.get(url, headers=UA, timeout=25)
+        r = requests.get(url, headers=UA, timeout=8)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "lxml")
         for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
@@ -1046,7 +1054,12 @@ def fetch_url(url: str) -> Dict:
     except Exception:
         return {"url": url, "title": url, "text": ""}
 
-def build_queries(student_answer: str, extracted_keywords: List[str], extra_user_q: str = "") -> List[str]:
+def build_queries(student_answer: str, 
+    extracted_keywords: List[str], 
+    extra_user_q: str = "", 
+    max_keywords: int = 6, 
+    max_domains: int = 3
+    ) -> List[str]:
     """
     Dynamically builds search queries for legal sources based on extracted keywords and user input.
     Targets EUR-Lex, CURIA, BaFin, ESMA, Gesetze-im-Internet.
@@ -1087,10 +1100,39 @@ def build_queries(student_answer: str, extracted_keywords: List[str], extra_user
 
     return base_queries
 
-def collect_corpus(student_answer: str, extracted_keywords: list[str], extra_user_q: str, max_fetch: int = 20) -> List[Dict]:
+def collect_corpus(student_answer: str,
+                   extracted_keywords: List[str],
+                   extra_user_q: str,
+                   max_fetch: int = 20,
+                   search_budget_s: float = 15.0,   # total time for searches
+                   fetch_budget_s: float = 12.0,    # total time for page fetches
+                   max_workers: int = 8             # concurrency
+                   ) -> List[Dict]:
+
+    # Seed URLs first (zero-cost)
     results = [{"title": "", "url": u} for u in SEED_URLS]
-    for q in build_queries(student_answer, extracted_keywords, extra_user_q):
-        results.extend(duckduckgo_search(q, max_results=5))
+
+    # Build fewer queries
+    queries = build_queries(student_answer, extracted_keywords, extra_user_q)
+
+    # ---- Concurrent search with wall-clock budget ----
+    within_budget = _time_budget(search_budget_s)
+    search_hits = []
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {ex.submit(duckduckgo_search, q, 5): q for q in queries}
+        for fut in as_completed(futs, timeout=search_budget_s + 2):
+            if not within_budget():
+                break
+            try:
+                search_hits.extend(fut.result() or [])
+            except Exception:
+                pass
+            if len(search_hits) >= 40:   # soft cap
+                break
+
+    results.extend(search_hits)
+
+    # Clean + keep allowed domains
     seen, cleaned = set(), []
     for r in results:
         url = r["url"]
@@ -1098,15 +1140,30 @@ def collect_corpus(student_answer: str, extracted_keywords: list[str], extra_use
             continue
         seen.add(url)
         domain = urlparse(url).netloc.lower()
-        if not any(domain.endswith(d) for d in ALLOWED_DOMAINS):
-            continue
-        cleaned.append(r)
-    fetched = []
-    for r in cleaned[:max_fetch]:
-        pg = fetch_url(r["url"])
-        if pg["text"]:
-            pg["title"] = pg["title"] or r.get("title") or r["url"]
-            fetched.append(pg)
+        if any(domain.endswith(d) for d in ALLOWED_DOMAINS):
+            cleaned.append(r)
+
+    # ---- Concurrent page fetch with wall-clock budget ----
+    fetched, within_budget = [], _time_budget(fetch_budget_s)
+    to_fetch = cleaned[:max_fetch]
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {ex.submit(fetch_url, r["url"]): r for r in to_fetch}
+        for fut in as_completed(futs, timeout=fetch_budget_s + 2):
+            if not within_budget():
+                break
+            try:
+                pg = fut.result()
+                if pg.get("text"):
+                    # carry over title if fetch_url didn't set one
+                    r = futs[fut]
+                    if not pg.get("title"):
+                        pg["title"] = r.get("title") or r["url"]
+                    fetched.append(pg)
+            except Exception:
+                pass
+            if len(fetched) >= max_fetch:
+                break
+
     return fetched
 
 # ---- Booklet relevance terms per question ----
@@ -1734,11 +1791,15 @@ with colA:
                 
                 top_pages, source_lines = [], []
                 if enable_web:
-                    pages = collect_corpus(student_answer, extracted_keywords, "", max_fetch=22)
-                    top_pages, source_lines = retrieve_snippets_with_booklet(
-                        student_answer, model_answer_filtered, pages, backend, extracted_keywords,
-                        user_query="", top_k_pages=max_sources, chunk_words=170
-                    )
+                    pages = collect_corpus(student_answer, extracted_keywords, "", max_fetch=18)
+                    if not pages:
+                        # fall back to “no sources” quickly
+                        top_pages, source_lines = [], []
+                    else:
+                        top_pages, source_lines = retrieve_snippets_with_booklet(
+                            student_answer, model_answer_filtered, pages, backend, extracted_keywords,
+                            user_query="", top_k_pages=max_sources, chunk_words=170
+                        )                    
                     
             # Breakdown
             with st.expander("🔬 Issue-by-issue breakdown"):

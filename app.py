@@ -15,8 +15,6 @@ import requests
 import streamlit as st
 import time
 
-
-
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from docx import Document
@@ -353,8 +351,6 @@ def load_booklet_anchors(docx_source: Union[str, IO[bytes]]) -> Tuple[List[Dict[
             "preview": first_words(txt, 10)
         })
     return records, chunks, metas
-
-## ---------------------------------------------------------------------------------------------
 
 # ---------- Public helpers you will call from the app ----------
 def _time_budget(seconds: float):
@@ -882,7 +878,6 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
 
     return reply
 
-# =======================
 # MODEL-CONSISTENCY GUARDRAIL (general, no question-specific logic)
 # =======================
 
@@ -1551,7 +1546,6 @@ def filter_sources_by_indices(source_lines: list[str], used: list[int]) -> list[
     return out
 
 # Paragraph markers may appear as "para. 115", "paragraph 115", "Rn. 115", "[115]", "¶ 115"
-
 _para_patterns = [
     re.compile(r"\bpara(?:graph)?\.?\s*(\d{1,4})\b", re.I),
     re.compile(r"\brn\.?\s*(\d{1,4})\b", re.I),
@@ -1767,7 +1761,6 @@ st.session_state["selected_question"] = selected_question
 
 st.subheader("📝 Your Answer")
 student_answer = st.text_area("Write your solution here (≥ ~120 words).", height=260)
-
 
 # ------------- Actions -------------
 colA, colB = st.columns([1, 1])
@@ -2002,6 +1995,6 @@ with colB:
 
 st.divider()
 st.markdown(
-    "ℹ️ **Notes**: This app is authored by Stephan Balthasar. It provides feedback based on artificial intelligence and large language models, and as a result, answers can be inaccurate. " 
-    "Students are advised to use caution when using the feedback engine and chat functions."
+    "ℹ️ **Notes**: (c) 2025 by Stephan Balthasar. This app provides feedback based on artificial intelligence and large language models, and as a result, answers can be inaccurate. " 
+    "Students are advised to use caution when using the feedback engine and chat functions. App feedback should not be used to infer potential grades in a real examination."
 )

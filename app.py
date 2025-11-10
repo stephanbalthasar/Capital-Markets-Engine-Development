@@ -1165,7 +1165,7 @@ def build_queries(student_answer: str, extracted_keywords: List[str], extra_user
 
     return base_queries
 
-def collect_corpus(student_answer: str, extra_user_q: str, max_fetch: int = 20) -> List[Dict]:
+def collect_corpus(student_answer: str, extracted_keywords: list[str], extra_user_q: str, max_fetch: int = 20) -> List[Dict]:
     results = [{"title": "", "url": u} for u in SEED_URLS]
     for q in build_queries(student_answer, extracted_keywords, extra_user_q):
         results.extend(duckduckgo_search(q, max_results=5))
@@ -1360,7 +1360,7 @@ def system_guardrails():
         "**Student's Core Claims:**\n"
         "**Mistakes:**\n"
         "**Missing Aspects:**\n"
-        "**Suggestions**\n"
+        "**Suggestions:**\n"
         "**Conclusion:**\n"
     )
 
@@ -1434,7 +1434,7 @@ OUTPUT FORMAT (exact headings and bulleting):
 • <incorrect claim> — short why [n]
 **Missing Aspects:**
 • <missing concept> — why it matters [n]
-**Suggestions**
+**Suggestions:**
 • <optional improvements> [n]
 **Conclusion:**
 <one sentence>
@@ -1560,7 +1560,6 @@ def parse_cited_indices(text: str) -> list[int]:
         return sorted({int(x) for x in re.findall(r"\[(\d+)\]", text or "")})
     except Exception:
         return []
-
 
 def filter_sources_by_indices(source_lines: list[str], used: list[int]) -> list[str]:
     """Return only those lines whose [n] was actually cited; preserve numbering."""
@@ -1816,7 +1815,7 @@ with colA:
                 
                 top_pages, source_lines = [], []
                 if enable_web:
-                    pages = collect_corpus(student_answer, "", max_fetch=22)
+                    pages = collect_corpus(student_answer, extracted_keywords, "", max_fetch=22)
                     top_pages, source_lines = retrieve_snippets_with_booklet(
                         student_answer, model_answer_filtered, pages, backend, extracted_keywords,
                         user_query="", top_k_pages=max_sources, chunk_words=170
@@ -1938,7 +1937,7 @@ with colB:
                 )
                 extracted_keywords = [kw for issue in extracted_issues for kw in issue.get("keywords", [])]
 
-                pages = collect_corpus(student_answer, user_q, max_fetch=20)
+                pages = collect_corpus(student_answer, extracted_keywords, user_q, max_fetch=20)
                 top_pages, source_lines = retrieve_snippets_with_booklet(
                     student_answer, model_answer_filtered, pages, backend, extracted_keywords,
                     user_query=user_q, top_k_pages=max_sources, chunk_words=170

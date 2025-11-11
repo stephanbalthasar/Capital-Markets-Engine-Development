@@ -1996,5 +1996,5 @@ with colB:
 st.divider()
 st.markdown(
     "ℹ️ **Notes**: (c) 2025 by Stephan Balthasar. This app provides feedback based on artificial intelligence and large language models, and as a result, answers can be inaccurate. " 
-    "Students are advised to use caution when using the feedback engine and chat functions. App feedback should not be used to infer potential grades in a real examination."
+    "Students are advised to use caution when using the feedback engine and chat functions. App feedback must not be read as an indicator for grades in a real examination."
 )

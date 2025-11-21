@@ -830,7 +830,7 @@ def tidy_empty_sections(reply: str) -> str:
     """
     if not reply:
         return reply
-    reply = normalize_headings(reply)
+        reply = normalize_headings(reply)
     return reply
 
 def format_feedback_and_filter_missing(reply: str, student_answer: str, model_answer_slice: str, rubric: dict) -> str:
@@ -846,7 +846,6 @@ def format_feedback_and_filter_missing(reply: str, student_answer: str, model_an
     
     if not reply:
         return reply
-
         reply = normalize_headings(reply)
     
     # Remove hallucinated 'Missing Aspects' (already present in student answer)

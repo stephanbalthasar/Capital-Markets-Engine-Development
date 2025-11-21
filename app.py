@@ -1337,6 +1337,15 @@ def system_guardrails():
         "**Conclusion:**\n"
     )
 
+def chat_guardrails():
+    return (
+        "You are a helpful EU/German capital markets law tutor.\n"
+        "Answer tutor chat questions conversationally, with complete sentences, summaries, and explanations.\n"
+        "DO NOT use feedback section headings ('**Student's Core Claims:**', '**Mistakes:**', '**Missing Aspects:**', '**Suggestions:**', '**Conclusion:**').\n"
+        "Cite booklet/web sources using [n] numerals as appropriate, avoid fabrications.\n"
+        "Focus on guidance, drafting, explanations, clarification—not grading or scoring."
+    )
+
 def _flatten_hits_misses_from_rubric(rubric: dict) -> tuple[list[str], list[str]]:
     """
     From the computed rubric, extract:
@@ -1476,7 +1485,7 @@ def lock_out_false_missing(reply: str, rubric: dict) -> str:
         return reply
 
 def build_chat_messages(chat_history: List[Dict], model_answer: str, sources_block: str, excerpts_block: str) -> List[Dict]:
-    msgs = [{"role": "system", "content": system_guardrails()}]
+    msgs = [{"role": "system", "content": chat_guardrails()}]
 
     # --- Step 3: Hard rule to keep replies aligned with the MODEL ANSWER ---
     msgs.append({"role": "system", "content":

@@ -1315,7 +1315,7 @@ def system_guardrails():
         "HARD RULES:\n"
         "• Base feedback on the AUTHORITATIVE MODEL_ANSWER; do not contradict it.\n"
         "• If student reasoning conflicts, state the correct conclusion first and explain briefly.\n"
-        "• “If the student asks for the MODEL ANSWER or full solution, politely decline and explain that only guidance and summaries can be provided.\n"
+        "• If the student asks for the MODEL ANSWER or full solution, politely decline and explain that only guidance and summaries can be provided.\n"
         "\n"
         "CITATIONS:\n"
         "• Cite ONLY using numeric brackets [n] that refer to the provided SOURCES.\n"
@@ -1341,7 +1341,7 @@ def chat_guardrails():
     return (
         "You are a helpful EU/German capital markets law tutor.\n"
         "Answer tutor chat questions conversationally, with complete sentences, summaries, and explanations.\n"
-        “If the student asks for the MODEL ANSWER or full solution, politely decline and explain that only guidance and summaries can be provided.\n
+        "If the student asks for the MODEL ANSWER or full solution, politely decline and explain that only guidance and summaries can be provided.\n"
         "DO NOT use feedback section headings ('**Student's Core Claims:**', '**Mistakes:**', '**Missing Aspects:**', '**Suggestions:**', '**Conclusion:**').\n"
         "Cite booklet/web sources using [n] numerals as appropriate, avoid fabrications.\n"
         "Focus on guidance, drafting, explanations, clarification—not grading or scoring."

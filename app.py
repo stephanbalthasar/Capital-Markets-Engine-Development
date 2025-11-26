@@ -1753,13 +1753,16 @@ with st.expander("📘 Case — click to read"):
     st.write(case_data.get("description", ""))
 
 # Question picker (dynamic per case)
-question_options = case_data.get("questions") or ["Question 1", "Question 2", "Question 3"]
+
+question_count = case_data.get("question_count", 1)
+question_labels = [f"Question {i+1}" for i in range(question_count)]
+
 selected_question = st.selectbox(
     "Which question are you answering?",
-    question_options,
-    index=0,
-    help="This limits feedback to the selected question only."
+    question_labels,
+    index=0
 )
+
 st.session_state["selected_question"] = selected_question
 
 st.subheader("📝 Your Answer")

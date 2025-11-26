@@ -1927,10 +1927,9 @@ with colB:
             backend = load_embedder()
             top_pages, source_lines = [], []
             if enable_web:
-                model_answer_full = case_data.get("model_answer", "")
-                model_answer_filtered, extracted_issues = filter_model_answer_and_rubric(
+                model_answer_filtered, extracted_issues = get_model_answer_slice_and_issues(
+                    case_data,
                     st.session_state.get("selected_question", "Question 1"),
-                    model_answer_full,
                     api_key
                 )
                 extracted_keywords = [kw for issue in extracted_issues for kw in issue.get("keywords", [])]

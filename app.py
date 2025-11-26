@@ -1097,39 +1097,45 @@ def build_queries(student_answer: str,
 
     return base_queries
 
-def collect_corpus(student_answer: str,
-                   extracted_keywords: List[str],
-                   extra_user_q: str,
-                   max_fetch: int = 20,
-                   search_budget_s: float = 15.0,   # total time for searches
-                   fetch_budget_s: float = 12.0,    # total time for page fetches
-                   max_workers: int = 8             # concurrency
-                   ) -> List[Dict]:
 
-    # Seed URLs first (zero-cost)
+def collect_corpus(
+    student_answer: str,
+    extracted_keywords: List[str],
+    extra_user_q: str,
+    max_fetch: int = 18,
+    search_budget_s: float = 15.0,
+    fetch_budget_s: float = 12.0,
+    max_workers: int = 6
+) -> List[Dict]:
+    # Seed URLs first
     results = [{"title": "", "url": u} for u in SEED_URLS]
 
-    # Build fewer queries
+    # Build queries and cap them
     queries = build_queries(student_answer, extracted_keywords, extra_user_q)
+    queries = queries[:8]  # ✅ Limit to top 8 queries
 
-    # ---- Concurrent search with wall-clock budget ----
+    # --- Concurrent search ---
     within_budget = _time_budget(search_budget_s)
     search_hits = []
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futs = {ex.submit(duckduckgo_search, q, 5): q for q in queries}
-        for fut in as_completed(futs, timeout=search_budget_s + 2):
-            if not within_budget():
-                break
-            try:
-                search_hits.extend(fut.result() or [])
-            except Exception:
-                pass
-            if len(search_hits) >= 40:   # soft cap
-                break
+
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = {ex.submit(duckduckgo_search, q, 5): q for q in queries}
+            for fut in as_completed(futs, timeout=search_budget_s + 10):  # ✅ Increased timeout
+                if not within_budget():
+                    break
+                try:
+                    search_hits.extend(fut.result() or [])
+                except Exception:
+                    pass
+                if len(search_hits) >= 40:
+                    break
+    except TimeoutError:
+        st.warning("⚠️ Search timed out. Using partial results.")
 
     results.extend(search_hits)
 
-    # Clean + keep allowed domains
+    # Filter allowed domains
     seen, cleaned = set(), []
     for r in results:
         url = r["url"]
@@ -1140,27 +1146,29 @@ def collect_corpus(student_answer: str,
         if any(domain.endswith(d) for d in ALLOWED_DOMAINS):
             cleaned.append(r)
 
-    # ---- Concurrent page fetch with wall-clock budget ----
+    # --- Concurrent fetch ---
     fetched, within_budget = [], _time_budget(fetch_budget_s)
     to_fetch = cleaned[:max_fetch]
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futs = {ex.submit(fetch_url, r["url"]): r for r in to_fetch}
-        for fut in as_completed(futs, timeout=fetch_budget_s + 2):
-            if not within_budget():
-                break
-            try:
-                pg = fut.result()
-                if pg.get("text"):
-                    # carry over title if fetch_url didn't set one
-                    r = futs[fut]
-                    if not pg.get("title"):
-                        pg["title"] = r.get("title") or r["url"]
-                    fetched.append(pg)
-            except Exception:
-                pass
-            if len(fetched) >= max_fetch:
-                break
 
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = {ex.submit(fetch_url, r["url"]): r for r in to_fetch}
+            for fut in as_completed(futs, timeout=fetch_budget_s + 10):  # ✅ Increased timeout
+                if not within_budget():
+                    break
+                try:
+                    pg = fut.result()
+                    if pg.get("text"):
+                        r = futs[fut]
+                        if not pg.get("title"):
+                            pg["title"] = r.get("title") or r["url"]
+                        fetched.append(pg)
+                except Exception:
+                    pass
+                if len(fetched) >= max_fetch:
+                    break
+    except TimeoutError:
+        st.warning("⚠️ Fetch timed out. Using partial results.")
     return fetched
 
 # ---- Booklet relevance terms per question ----

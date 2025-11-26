@@ -370,6 +370,27 @@ def load_booklet_anchors(docx_source: Union[str, IO[bytes]]) -> Tuple[List[Dict[
         })
     return records, chunks, metas
 
+
+# ---- Helpers for per-question model answers ----
+def get_question_labels(case_data: dict) -> list[str]:
+    """Return ['Question 1', 'Question 2', ...] based on question_count."""
+    n = int(case_data.get("question_count", 1))
+    return [f"Question {i+1}" for i in range(max(1, n))]
+
+def get_model_answer_slice_and_issues(case_data: dict, selected_label: str, api_key: str) -> tuple[str, list[dict]]:
+    """
+    Return the authoritative slice for the selected question and the extracted issues.
+    If model_answer_sections are missing, fall back to old slicer using model_answer_full or model_answer.
+    """
+    labels = get_question_labels(case_data)
+    idx = labels.index(selected_label) if selected_label in labels else 0
+
+    sections = case_data.get("model_answer_sections") or []
+    if sections and idx < len(sections):
+        model_answer_filtered = sections[idx].strip()
+        extracted_issues = extract_issues_from_model_answer(model_answer_filtered, api_key)
+        return model_answer_filtered, extracted_issues
+
 # ---------- Public helpers you will call from the app ----------
 def _time_budget(seconds: float):
     start = time.monotonic()
@@ -1753,17 +1774,13 @@ with st.expander("📘 Case — click to read"):
     st.write(case_data.get("description", ""))
 
 # Question picker (dynamic per case)
-
-question_count = case_data.get("question_count", 1)
-question_labels = [f"Question {i+1}" for i in range(question_count)]
-
-selected_question = st.selectbox(
+question_labels = get_question_labels(case_data)
+selected_question_label = st.selectbox(
     "Which question are you answering?",
     question_labels,
     index=0
 )
-
-st.session_state["selected_question"] = selected_question
+st.session_state["selected_question"] = selected_question_label
 
 st.subheader("📝 Your Answer")
 student_answer = st.text_area("Write your solution here (≥ ~120 words).", height=260)
@@ -1778,9 +1795,8 @@ with colA:
         else:
             with st.spinner("Scoring and collecting sources..."):
                 backend = load_embedder()
-                model_answer_full = case_data.get("model_answer", "")
-                model_answer_filtered, extracted_issues = filter_model_answer_and_rubric(
-                    selected_question, model_answer_full, api_key
+                model_answer_filtered, extracted_issues = get_model_answer_slice_and_issues(
+                    case_data, selected_question_label, api_key
                 )
                 extracted_keywords = [kw for issue in extracted_issues for kw in issue.get("keywords", [])]
                 rubric = generate_rubric_from_model_answer(

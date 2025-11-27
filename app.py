@@ -1667,7 +1667,7 @@ if not st.session_state.authenticated:
             st.session_state.role = "tutor"
     elif pin_input:
         st.error("Incorrect PIN. Please try again.")
-st.stop()
+    st.stop()
 
 # Sidebar (visible to all users after login)
 with st.sidebar:

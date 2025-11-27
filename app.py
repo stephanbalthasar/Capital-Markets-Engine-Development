@@ -1779,6 +1779,7 @@ case_data = next(c for c in cases if c.get("title") == selected_case_title)
 st.subheader("📘 Case")
 st.write(case_data.get("description", ""))
 
+st.subheader("📝 Select which question you want to answer to get feedback")
 # Question picker (dynamic per case)
 question_labels = get_question_labels(case_data)
 selected_question_label = st.selectbox(
@@ -1787,8 +1788,6 @@ selected_question_label = st.selectbox(
     index=0
 )
 st.session_state["selected_question"] = selected_question_label
-
-st.subheader("📝 Your Answer")
 student_answer = st.text_area("Write your solution here (≥ ~120 words).", height=260)
 
 # ------------- Actions -------------

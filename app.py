@@ -1659,7 +1659,7 @@ if not st.session_state.authenticated:
             st.session_state.role = "student"
             # Log student login
             with open("logs.csv", "a", encoding="utf-8") as f:
-                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},LOGIN,student\n")
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},LOGIN\n")
     elif pin_input == tutor_pin:
         st.success("PIN accepted. Click CONTINUE to proceed as tutor.")
         if st.button("Continue"):
@@ -1772,18 +1772,37 @@ with st.sidebar:
         st.exception(e)
 
     # --- Tutor Log Viewer ---
-    if st.session_state.get("role") == "tutor":
-        st.subheader("📒 Log Book")
-        if os.path.exists("logs.csv"):
-            with open("logs.csv", "r", encoding="utf-8") as f:
-                log_content = f.read()
-            st.download_button("Download Logs", data=log_content, file_name="logs.csv")
-            st.text(log_content)
-        else:
-            st.info("No logs yet.")
+    
+if st.session_state.get("role") == "tutor":
+    st.subheader("📒 Log Book (last 7 days)")
+    log_path = "logs.csv"
+    login_count, answer_count = 0, 0
+    now = datetime.now()
+    seven_days_ago = now - timedelta(days=7)
+
+    if os.path.exists(log_path):
+        with open(log_path, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split(",")
+                if len(parts) < 3:
+                    continue
+                try:
+                    ts = datetime.strptime(parts[0], "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    continue
+                if ts >= seven_days_ago:
+                    event_type = parts[1].strip().upper()
+                    if event_type == "LOGIN":
+                        login_count += 1
+                    elif event_type == "ANSWER":
+                        answer_count += 1
+
+        st.metric("Student logins (7 days)", login_count)
+        st.metric("Answer submissions (7 days)", answer_count)
+    else:
+        st.info("No logs yet.")
 
 # Main UI
-
 # Load case data
 cases = load_cases()
 case_titles = [c.get("title", f"Case {i+1}") for i, c in enumerate(cases)]
@@ -1909,12 +1928,8 @@ with colA:
                     # --- Log student answer and feedback ---
                     if st.session_state.role == "student":
                         with open("logs.csv", "a", encoding="utf-8") as f:
-                            f.write(
-                                f"{time.strftime('%Y-%m-%d %H:%M:%S')},ANSWER,"
-                                f"{selected_case_title},{selected_question_label},"
-                                f"{json.dumps(student_answer)},"
-                                f"{json.dumps(reply)}\n"
-                            )
+                            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},ANSWER\n")
+                   
                 else:
                     st.info("LLM unavailable. See corrections above and the issue breakdown.")
             else:

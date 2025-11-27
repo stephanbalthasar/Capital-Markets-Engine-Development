@@ -1644,18 +1644,14 @@ if not st.session_state.authenticated:
             st.image("assets/logo.png", width=240)
         with title_col:
             st.title("EUCapML Case Tutor")
-    
-        
     # --- Login Block ---
     pin_input = st.text_input("Enter your password", type="password")
-    
     try:
         student_pin = st.secrets["STUDENT_PIN"]
         tutor_pin = st.secrets["TUTOR_PIN"]
     except KeyError:
         st.error("PINs not found in secrets. Please configure STUDENT_PIN and TUTOR_PIN in .streamlit/secrets.toml.")
         st.stop()
-    
     if pin_input == student_pin:
         st.success("PIN accepted. By clicking CONTINUE below you accept that this tool uses AI and answers may not be accurate. No liability is accepted.")
         if st.button("Continue"):
@@ -1671,7 +1667,7 @@ if not st.session_state.authenticated:
             st.session_state.role = "tutor"
     elif pin_input:
         st.error("Incorrect PIN. Please try again.")
-        st.stop()
+st.stop()
 
 # Sidebar (visible to all users after login)
 with st.sidebar:

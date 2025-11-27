@@ -1645,22 +1645,33 @@ if not st.session_state.authenticated:
         with title_col:
             st.title("EUCapML Case Tutor")
     
+        
+    # --- Login Block ---
     pin_input = st.text_input("Enter your password", type="password")
-
+    
     try:
-        correct_pin = st.secrets["STUDENT_PIN"]
+        student_pin = st.secrets["STUDENT_PIN"]
+        tutor_pin = st.secrets["TUTOR_PIN"]
     except KeyError:
-        st.error("STUDENT_PIN not found in secrets. Please configure it in .streamlit/secrets.toml.")
+        st.error("PINs not found in secrets. Please configure STUDENT_PIN and TUTOR_PIN in .streamlit/secrets.toml.")
         st.stop()
-
-    if pin_input == correct_pin:
-        st.session_state.authenticated = True
-        st.success("PIN accepted. By clicking CONTINUE below you accept that this tool uses artificial intelligence and large language models, and that accordingly, answers may not be accurate. No liability is accepted for use of this tool.")
+    
+    if pin_input == student_pin:
+        st.success("PIN accepted. By clicking CONTINUE below you accept that this tool uses AI and answers may not be accurate. No liability is accepted.")
         if st.button("Continue"):
-            st.rerun()
+            st.session_state.authenticated = True
+            st.session_state.role = "student"
+            # Log student login
+            with open("logs.csv", "a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},LOGIN,student\n")
+    elif pin_input == tutor_pin:
+        st.success("PIN accepted. Click CONTINUE to proceed as tutor.")
+        if st.button("Continue"):
+            st.session_state.authenticated = True
+            st.session_state.role = "tutor"
     elif pin_input:
         st.error("Incorrect PIN. Please try again.")
-    st.stop()
+        st.stop()
 
 # Sidebar (visible to all users after login)
 with st.sidebar:
@@ -1763,6 +1774,17 @@ with st.sidebar:
         st.error(f"Booklet not found at: {docx_source}")
     except Exception as e:
         st.exception(e)
+
+# --- Tutor Log Viewer ---
+if st.session_state.get("role") == "tutor":
+    st.subheader("📒 Log Book")
+    if os.path.exists("logs.csv"):
+        with open("logs.csv", "r", encoding="utf-8") as f:
+            log_content = f.read()
+        st.download_button("Download Logs", data=log_content, file_name="logs.csv")
+        st.text(log_content)
+    else:
+        st.info("No logs yet.")
 
 # Main UI
 
@@ -1888,6 +1910,15 @@ with colA:
             
                 if reply:
                     st.markdown(reply)
+                    # --- Log student answer and feedback ---
+                    if st.session_state.role == "student":
+                        with open("logs.csv", "a", encoding="utf-8") as f:
+                            f.write(
+                                f"{time.strftime('%Y-%m-%d %H:%M:%S')},ANSWER,"
+                                f"{selected_case_title},{selected_question_label},"
+                                f"{json.dumps(student_answer)},"
+                                f"{json.dumps(reply)}\n"
+                            )
                 else:
                     st.info("LLM unavailable. See corrections above and the issue breakdown.")
             else:

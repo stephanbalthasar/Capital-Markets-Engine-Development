@@ -1776,10 +1776,8 @@ st.title("EUCapML Case Tutor")
 # Case picker
 selected_case_title = st.selectbox("🗂️ Select a case", case_titles, index=0)
 case_data = next(c for c in cases if c.get("title") == selected_case_title)
-
-# Show case description
-with st.expander("📘 Case — click to read"):
-    st.write(case_data.get("description", ""))
+st.subheader("📘 Case")
+st.write(case_data.get("description", ""))
 
 # Question picker (dynamic per case)
 question_labels = get_question_labels(case_data)

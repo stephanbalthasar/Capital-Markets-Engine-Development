@@ -1771,16 +1771,16 @@ with st.sidebar:
     except Exception as e:
         st.exception(e)
 
-# --- Tutor Log Viewer ---
-if st.session_state.get("role") == "tutor":
-    st.subheader("📒 Log Book")
-    if os.path.exists("logs.csv"):
-        with open("logs.csv", "r", encoding="utf-8") as f:
-            log_content = f.read()
-        st.download_button("Download Logs", data=log_content, file_name="logs.csv")
-        st.text(log_content)
-    else:
-        st.info("No logs yet.")
+    # --- Tutor Log Viewer ---
+    if st.session_state.get("role") == "tutor":
+        st.subheader("📒 Log Book")
+        if os.path.exists("logs.csv"):
+            with open("logs.csv", "r", encoding="utf-8") as f:
+                log_content = f.read()
+            st.download_button("Download Logs", data=log_content, file_name="logs.csv")
+            st.text(log_content)
+        else:
+            st.info("No logs yet.")
 
 # Main UI
 

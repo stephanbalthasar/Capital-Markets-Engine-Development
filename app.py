@@ -1180,7 +1180,7 @@ def booklet_chunk_relevant(text: str, extracted_keywords: list[str], user_query:
 
 def retrieve_snippets_with_booklet(student_answer, model_answer_filtered, pages, backend,
                                   extracted_keywords, user_query: str = "",
-                                  top_k_pages=8, chunk_words=170):
+                                  top_k_pages=8, chunk_words=170, docx_source=BOOKLET):
     booklet_chunks, booklet_metas = [], []
     try:
         booklet_chunks, booklet_metas = parse_booklet_docx(docx_source)         

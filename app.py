@@ -1774,34 +1774,34 @@ with st.sidebar:
 
     # --- Tutor Log Viewer ---
     
-if st.session_state.get("role") == "tutor":
-    st.subheader("📒 Log Book (last 7 days)")
-    log_path = "logs.csv"
-    login_count, answer_count = 0, 0
-    now = datetime.now()
-    seven_days_ago = now - timedelta(days=7)
-
-    if os.path.exists(log_path):
-        with open(log_path, "r", encoding="utf-8") as f:
-            for line in f:
-                parts = line.strip().split(",")
-                if len(parts) < 3:
-                    continue
-                try:
-                    ts = datetime.strptime(parts[0], "%Y-%m-%d %H:%M:%S")
-                except ValueError:
-                    continue
-                if ts >= seven_days_ago:
-                    event_type = parts[1].strip().upper()
-                    if event_type == "LOGIN":
-                        login_count += 1
-                    elif event_type == "ANSWER":
-                        answer_count += 1
-
-        st.metric("Student logins (7 days)", login_count)
-        st.metric("Answer submissions (7 days)", answer_count)
-    else:
-        st.info("No logs yet.")
+    if st.session_state.get("role") == "tutor":
+        st.subheader("📒 Log Book (last 7 days)")
+        log_path = "logs.csv"
+        login_count, answer_count = 0, 0
+        now = datetime.now()
+        seven_days_ago = now - timedelta(days=7)
+    
+        if os.path.exists(log_path):
+            with open(log_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    parts = line.strip().split(",")
+                    if len(parts) < 3:
+                        continue
+                    try:
+                        ts = datetime.strptime(parts[0], "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        continue
+                    if ts >= seven_days_ago:
+                        event_type = parts[1].strip().upper()
+                        if event_type == "LOGIN":
+                            login_count += 1
+                        elif event_type == "ANSWER":
+                            answer_count += 1
+    
+            st.metric("Student logins (7 days)", login_count)
+            st.metric("Answer submissions (7 days)", answer_count)
+        else:
+            st.info("No logs yet.")
 
 # Main UI
 # Load case data

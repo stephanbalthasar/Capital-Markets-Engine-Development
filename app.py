@@ -17,6 +17,7 @@ import time
 
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
 from docx import Document
 from docx.text.paragraph import Paragraph
 from docx.table import Table, _Cell

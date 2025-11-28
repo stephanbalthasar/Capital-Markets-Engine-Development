@@ -412,8 +412,9 @@ def log_event(event_type: str):
     try:
         df_existing = conn.read(spreadsheet=sheet_url, worksheet=worksheet)
 
-        # If empty or None, create with headers
+        # If empty or None, create header row in Google Sheet
         if df_existing is None or df_existing.empty:
+            # Create a DataFrame with headers + first row
             df_updated = pd.DataFrame(columns=["timestamp", "event_type"])
             df_updated = pd.concat([df_updated, new_row], ignore_index=True)
         else:
@@ -424,6 +425,7 @@ def log_event(event_type: str):
                     df_existing[col] = ""
             df_updated = pd.concat([df_existing, new_row], ignore_index=True)
 
+        # Write back full DataFrame
         conn.update(spreadsheet=sheet_url, worksheet=worksheet, data=df_updated)
     except Exception as e:
         st.warning(f"Log write failed: {e}")

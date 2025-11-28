@@ -9,7 +9,6 @@ import json
 import math
 import numpy as np
 import os
-import pandas as pd
 import pathlib
 import re
 import requests
@@ -25,7 +24,6 @@ from docx.table import Table, _Cell
 from docx.oxml.text.paragraph import CT_P
 from docx.oxml.table import CT_Tbl
 from docx.document import Document as _Document
-from streamlit_gsheets import GSheetsConnection
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -33,12 +31,6 @@ from typing import List, Dict, Any, Tuple, Union, IO
 from urllib.parse import quote_plus, urlparse
 
 BOOKLET = "assets/EUCapML - Course Booklet.docx"
-
-# Connect to Google Sheets
-conn = st.connection("gsheets", type=GSheetsConnection, ttl=0)
-sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
-worksheet = st.secrets["connections"]["gsheets"].get("worksheet", "Sheet1")
-
 
 # ---------------- Build fingerprint (to verify latest deployment) ----------------
 APP_HASH = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:10]
@@ -401,35 +393,6 @@ def get_model_answer_slice_and_issues(case_data: dict, selected_label: str, api_
         return model_answer_filtered, extracted_issues
 
 # ---------- Public helpers you will call from the app ----------
-# --- Logging Functions ---
-
-def log_event(event_type: str):
-    new_row = pd.DataFrame({
-        "timestamp": [time.strftime("%Y-%m-%d %H:%M:%S")],
-        "event_type": [event_type],
-    })
-
-    try:
-        df_existing = conn.read(spreadsheet=sheet_url, worksheet=worksheet)
-
-        if df_existing is None or df_existing.empty:
-            # Create headers and first row together
-            df_updated = pd.DataFrame(columns=["timestamp", "event_type"])
-            df_updated = pd.concat([df_updated, new_row], ignore_index=True)
-        else:
-            # Ensure columns match
-            expected_cols = ["timestamp", "event_type"]
-            for col in expected_cols:
-                if col not in df_existing.columns:
-                    df_existing[col] = ""
-            df_updated = pd.concat([df_existing, new_row], ignore_index=True)
-
-        # ✅ Single update with headers + all rows
-        conn.update(spreadsheet=sheet_url, worksheet=worksheet, data=df_updated)
-
-    except Exception as e:
-        st.warning(f"Log write failed: {e}")
-
 def _time_budget(seconds: float):
     start = time.monotonic()
     return lambda: time.monotonic() - start < seconds
@@ -1695,7 +1658,9 @@ if not st.session_state.authenticated:
         if st.button("Continue"):
             st.session_state.authenticated = True
             st.session_state.role = "student"
-            log_event("LOGIN")            
+            # Log student login
+            with open("logs.csv", "a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},LOGIN\n")
     elif pin_input == tutor_pin:
         st.success("PIN accepted. Click CONTINUE to proceed as tutor.")
         if st.button("Continue"):
@@ -1808,25 +1773,35 @@ with st.sidebar:
         st.exception(e)
 
     # --- Tutor Log Viewer ---
+    
     if st.session_state.get("role") == "tutor":
         st.subheader("📒 Log Book (last 7 days)")
-        try:
-            df = conn.read(spreadsheet=sheet_url, worksheet=worksheet)
-        except Exception as e:
-            st.error(f"Could not read Google Sheet: {e}")
-            df = pd.DataFrame(columns=["timestamp", "event_type"])  # fallback
-        if df.empty:
-            st.info("No logs yet.")
-        else:
-            now = datetime.now()
-            seven_days_ago = now - timedelta(days=7)
-            df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-            recent = df[df["timestamp"] >= seven_days_ago]
-            login_count = (recent["event_type"] == "LOGIN").sum()
-            answer_count = (recent["event_type"] == "ANSWER").sum()
+        log_path = "logs.csv"
+        login_count, answer_count = 0, 0
+        now = datetime.now()
+        seven_days_ago = now - timedelta(days=7)
+    
+        if os.path.exists(log_path):
+            with open(log_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    parts = line.strip().split(",")
+                    if len(parts) < 3:
+                        continue
+                    try:
+                        ts = datetime.strptime(parts[0], "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        continue
+                    if ts >= seven_days_ago:
+                        event_type = parts[1].strip().upper()
+                        if event_type == "LOGIN":
+                            login_count += 1
+                        elif event_type == "ANSWER":
+                            answer_count += 1
+    
             st.metric("Student logins (7 days)", login_count)
             st.metric("Answer submissions (7 days)", answer_count)
-    # --- Tutor Log Viewer ends ---
+        else:
+            st.info("No logs yet.")
 
 # Main UI
 # Load case data
@@ -1952,8 +1927,10 @@ with colA:
                 if reply:
                     st.markdown(reply)
                     # --- Log student answer and feedback ---
-                    if st.session_state.get("role") == "student":
-                            log_event("ANSWER")
+                    if st.session_state.role == "student":
+                        with open("logs.csv", "a", encoding="utf-8") as f:
+                            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},ANSWER\n")
+                   
                 else:
                     st.info("LLM unavailable. See corrections above and the issue breakdown.")
             else:

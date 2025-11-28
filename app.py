@@ -419,7 +419,7 @@ def log_event(event_type: str):
         # Write back full DataFrame
         conn.update(spreadsheet=sheet_url, worksheet=worksheet, data=df_updated)
     except Exception as e:
-        st.warning(f"Log write failed: {e}"
+        st.warning(f"Log write failed: {e}")
 
 def _time_budget(seconds: float):
     start = time.monotonic()

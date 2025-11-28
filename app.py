@@ -1670,6 +1670,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed",   # ← collapsed by default
 )
 
+# Ensure logs list exists for all roles
+if "logs" not in st.session_state:
+    st.session_state.logs = []
+
 # Student login
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False

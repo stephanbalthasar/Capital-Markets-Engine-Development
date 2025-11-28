@@ -1670,6 +1670,24 @@ st.set_page_config(
     initial_sidebar_state="collapsed",   # ← collapsed by default
 )
 
+# DEBUG: Check secrets (remove after testing!)
+if st.checkbox("Show secrets (debug)"):
+    st.write("GITHUB_TOKEN:", st.secrets.get("GITHUB_TOKEN", "❌ Missing"))
+    st.write("GIST_ID:", st.secrets.get("GIST_ID", "❌ Missing"))
+    st.write("STUDENT_PIN:", st.secrets.get("STUDENT_PIN", "❌ Missing"))
+    st.write("TUTOR_PIN:", st.secrets.get("TUTOR_PIN", "❌ Missing"))
+
+# DEBUG: Test Gist API connectivity
+if st.button("Test Gist API"):
+    url = f"https://api.github.com/gists/{st.secrets['GIST_ID']}"
+    headers = {"Authorization": f"token {st.secrets['GITHUB_TOKEN']}"}
+    r = requests.get(url, headers=headers)
+    st.write("Status code:", r.status_code)
+    st.json(r.json())
+
+
+
+
 # Ensure logs list exists for all roles
 if "logs" not in st.session_state:
     st.session_state.logs = []

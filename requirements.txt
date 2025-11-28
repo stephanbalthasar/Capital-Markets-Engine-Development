@@ -9,3 +9,5 @@ lxml>=4.9.0
 altair>=4.2.0
 streamlit-gsheets
 pandas
+torch>=2.0.0
+transformers>=4.35.0

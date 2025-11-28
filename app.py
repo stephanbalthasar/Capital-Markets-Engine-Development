@@ -1660,7 +1660,7 @@ if not st.session_state.authenticated:
             st.session_state.role = "student"
             # Log student login
             with open("logs.csv", "a", encoding="utf-8") as f:
-                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},LOGIN\n")
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},LOGIN,{st.session_state.role}\n")
     elif pin_input == tutor_pin:
         st.success("PIN accepted. Click CONTINUE to proceed as tutor.")
         if st.button("Continue"):
@@ -1929,8 +1929,7 @@ with colA:
                     # --- Log student answer and feedback ---
                     if st.session_state.role == "student":
                         with open("logs.csv", "a", encoding="utf-8") as f:
-                            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},ANSWER\n")
-                   
+                            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},ANSWER,{st.session_state.role}\n")
                 else:
                     st.info("LLM unavailable. See corrections above and the issue breakdown.")
             else:

@@ -1816,7 +1816,7 @@ with st.sidebar:
         st.exception(e)
 
     # --- Tutor Log Viewer ---
-        
+if st.session_state.get("role") == "tutor":
     st.subheader("📒 Log Book (last 7 days)")
     lines = fetch_gist()
     if lines:

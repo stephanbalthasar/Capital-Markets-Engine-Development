@@ -4,7 +4,6 @@
 # - Web retrieval from EUR-Lex, CURIA, ESMA, BaFin, Gesetze-im-Internet
 # - Hidden model answer is authoritative; citations [1], [2] map to sources
 
-
 import hashlib
 import json
 import math

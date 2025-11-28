@@ -9,5 +9,5 @@ lxml>=4.9.0
 torch>=2.0.0
 transformers>=4.35.0
 altair>=4.2.0
-git+https://github.com/streamlit/gsheets-connection.git
+streamlit-gsheets-connection>=0.1.0
 pandas

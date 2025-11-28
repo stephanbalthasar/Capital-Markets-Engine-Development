@@ -14,7 +14,6 @@ import pathlib
 import re
 import requests
 import streamlit as st
-import streamlit_gsheets 
 import time
 
 from bs4 import BeautifulSoup
@@ -403,6 +402,7 @@ def get_model_answer_slice_and_issues(case_data: dict, selected_label: str, api_
 
 # ---------- Public helpers you will call from the app ----------
 # --- Logging Functions ---
+
 def log_event(event_type: str):
     new_row = pd.DataFrame({
         "timestamp": [time.strftime("%Y-%m-%d %H:%M:%S")],
@@ -411,6 +411,8 @@ def log_event(event_type: str):
     try:
         conn.update(spreadsheet=sheet_url, worksheet=worksheet, data=new_row, append=True)
     except Exception as e:
+        # Show a non-blocking warning so the app keeps running
+        st.warning(f"Log write failed: {e}")
 
 def _time_budget(seconds: float):
     start = time.monotonic()

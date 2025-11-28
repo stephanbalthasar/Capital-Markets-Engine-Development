@@ -26,6 +26,7 @@ from docx.table import Table, _Cell
 from docx.oxml.text.paragraph import CT_P
 from docx.oxml.table import CT_Tbl
 from docx.document import Document as _Document
+from streamlit_gsheets import GSheetsConnection
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -35,7 +36,7 @@ from urllib.parse import quote_plus, urlparse
 BOOKLET = "assets/EUCapML - Course Booklet.docx"
 
 # Connect to Google Sheets
-conn = st.connection("gsheets", type="gsheets", ttl=0)
+conn = st.connection("gsheets", type=GSheetsConnection, ttl=0)
 sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
 
 # ---------------- Build fingerprint (to verify latest deployment) ----------------

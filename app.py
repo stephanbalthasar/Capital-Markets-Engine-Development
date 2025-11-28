@@ -411,7 +411,6 @@ def log_event(event_type: str):
     try:
         conn.update(spreadsheet=sheet_url, worksheet=worksheet, data=new_row, append=True)
     except Exception as e:
-# --- Logging Functions end ---
 
 def _time_budget(seconds: float):
     start = time.monotonic()

@@ -424,7 +424,7 @@ def log_event(event_type: str):
                     df_existing[col] = ""
             df_updated = pd.concat([df_existing, new_row], ignore_index=True)
 
-        # Write back full DataFrame (headers + all rows)
+        # ✅ Single update with headers + all rows
         conn.update(spreadsheet=sheet_url, worksheet=worksheet, data=df_updated)
 
     except Exception as e:

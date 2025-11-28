@@ -396,18 +396,27 @@ def get_model_answer_slice_and_issues(case_data: dict, selected_label: str, api_
 
 # ---------- Public helpers you will call from the app ----------
 
-def update_gist(logs):
-    """Update the Gist with the current logs list."""
-    content = "\n".join([",".join(row) for row in logs])
+def update_gist(new_entry):
+    """Append a new entry to the Gist without overwriting previous logs."""
+    # Fetch existing logs from Gist
     url = f"https://api.github.com/gists/{GIST_ID}"
     headers = {"Authorization": f"token {GITHUB_TOKEN}"}
-    payload = {
-        "files": {
-            "logs.csv": {
-                "content": content
-            }
-        }
-    }
+    try:
+        r = requests.get(url, headers=headers)
+        if r.status_code == 200:
+            files = r.json().get("files", {})
+            content = files.get("logs.csv", {}).get("content", "")
+            existing_lines = [line for line in content.splitlines() if line.strip()]
+        else:
+            existing_lines = ["timestamp,event,role"]  # start with header if Gist empty
+    except Exception:
+        existing_lines = ["timestamp,event,role"]
+
+    # Append new entry
+    existing_lines.append(",".join(new_entry))
+
+    # Update Gist with combined content
+    payload = {"files": {"logs.csv": {"content": "\n".join(existing_lines)}}}
     try:
         r = requests.patch(url, headers=headers, data=json.dumps(payload))
         if r.status_code != 200:
@@ -1701,8 +1710,7 @@ if not st.session_state.authenticated:
             # Log student login
             if "logs" not in st.session_state:
                 st.session_state.logs = []
-            st.session_state.logs.append([time.strftime("%Y-%m-%d %H:%M:%S"), "LOGIN", st.session_state.role])
-            update_gist(st.session_state.logs)
+            update_gist([time.strftime("%Y-%m-%d %H:%M:%S"), "LOGIN", st.session_state.role])
             
     elif pin_input == tutor_pin:
         st.success("PIN accepted. Click CONTINUE to proceed as tutor.")
@@ -1956,8 +1964,7 @@ with colA:
                     st.markdown(reply)
                     # --- Log student answer and feedback ---
                     if st.session_state.role == "student":
-                        st.session_state.logs.append([time.strftime("%Y-%m-%d %H:%M:%S"), "ANSWER", st.session_state.role])
-                        update_gist(st.session_state.logs)
+                        update_gist([time.strftime("%Y-%m-%d %H:%M:%S"), "LOGIN", st.session_state.role])
                 else:
                     st.info("LLM unavailable. See corrections above and the issue breakdown.")
             else:

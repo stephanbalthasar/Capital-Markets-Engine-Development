@@ -412,18 +412,20 @@ def log_event(event_type: str):
     try:
         df_existing = conn.read(spreadsheet=sheet_url, worksheet=worksheet)
 
-        # If sheet is empty, create header row and first entry
         if df_existing is None or df_existing.empty:
-            # Write headers first
-            header_df = pd.DataFrame(columns=["timestamp", "event_type"])
-            conn.update(spreadsheet=sheet_url, worksheet=worksheet, data=header_df)
-
-            # Now append the first row
-            conn.update(spreadsheet=sheet_url, worksheet=worksheet, data=new_row)
+            # Create headers and first row together
+            df_updated = pd.DataFrame(columns=["timestamp", "event_type"])
+            df_updated = pd.concat([df_updated, new_row], ignore_index=True)
         else:
-            # Append to existing data
+            # Ensure columns match
+            expected_cols = ["timestamp", "event_type"]
+            for col in expected_cols:
+                if col not in df_existing.columns:
+                    df_existing[col] = ""
             df_updated = pd.concat([df_existing, new_row], ignore_index=True)
-            conn.update(spreadsheet=sheet_url, worksheet=worksheet, data=df_updated)
+
+        # Write back full DataFrame (headers + all rows)
+        conn.update(spreadsheet=sheet_url, worksheet=worksheet, data=df_updated)
 
     except Exception as e:
         st.warning(f"Log write failed: {e}")

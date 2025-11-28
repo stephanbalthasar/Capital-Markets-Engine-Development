@@ -4,11 +4,13 @@
 # - Web retrieval from EUR-Lex, CURIA, ESMA, BaFin, Gesetze-im-Internet
 # - Hidden model answer is authoritative; citations [1], [2] map to sources
 
+
 import hashlib
 import json
 import math
 import numpy as np
 import os
+import pandas as pd
 import pathlib
 import re
 import requests
@@ -31,6 +33,10 @@ from typing import List, Dict, Any, Tuple, Union, IO
 from urllib.parse import quote_plus, urlparse
 
 BOOKLET = "assets/EUCapML - Course Booklet.docx"
+
+# Connect to Google Sheets
+conn = st.connection("gsheets", type="gsheets", ttl=0)
+sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
 
 # ---------------- Build fingerprint (to verify latest deployment) ----------------
 APP_HASH = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:10]
@@ -393,6 +399,14 @@ def get_model_answer_slice_and_issues(case_data: dict, selected_label: str, api_
         return model_answer_filtered, extracted_issues
 
 # ---------- Public helpers you will call from the app ----------
+# --- Logging Functions ---
+def log_event(event_type: str):
+    new_row = pd.DataFrame({
+        "timestamp": [time.strftime("%Y-%m-%d %H:%M:%S")],
+        "event_type": [event_type]
+    })
+    conn.update(sheet_url, new_row, append=True)
+
 def _time_budget(seconds: float):
     start = time.monotonic()
     return lambda: time.monotonic() - start < seconds
@@ -1658,9 +1672,7 @@ if not st.session_state.authenticated:
         if st.button("Continue"):
             st.session_state.authenticated = True
             st.session_state.role = "student"
-            # Log student login
-            with open("logs.csv", "a", encoding="utf-8") as f:
-                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},LOGIN\n")
+            log_event("LOGIN")            
     elif pin_input == tutor_pin:
         st.success("PIN accepted. Click CONTINUE to proceed as tutor.")
         if st.button("Continue"):
@@ -1773,35 +1785,21 @@ with st.sidebar:
         st.exception(e)
 
     # --- Tutor Log Viewer ---
-    
     if st.session_state.get("role") == "tutor":
         st.subheader("📒 Log Book (last 7 days)")
-        log_path = "logs.csv"
-        login_count, answer_count = 0, 0
-        now = datetime.now()
-        seven_days_ago = now - timedelta(days=7)
-    
-        if os.path.exists(log_path):
-            with open(log_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    parts = line.strip().split(",")
-                    if len(parts) < 3:
-                        continue
-                    try:
-                        ts = datetime.strptime(parts[0], "%Y-%m-%d %H:%M:%S")
-                    except ValueError:
-                        continue
-                    if ts >= seven_days_ago:
-                        event_type = parts[1].strip().upper()
-                        if event_type == "LOGIN":
-                            login_count += 1
-                        elif event_type == "ANSWER":
-                            answer_count += 1
-    
+        df = conn.read(sheet_url)
+        if df.empty:
+            st.info("No logs yet.")
+        else:
+            now = datetime.now()
+            seven_days_ago = now - timedelta(days=7)
+            df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+            recent = df[df["timestamp"] >= seven_days_ago]
+            login_count = (recent["event_type"] == "LOGIN").sum()
+            answer_count = (recent["event_type"] == "ANSWER").sum()
             st.metric("Student logins (7 days)", login_count)
             st.metric("Answer submissions (7 days)", answer_count)
-        else:
-            st.info("No logs yet.")
+    # --- Tutor Log Viewer ends ---
 
 # Main UI
 # Load case data
@@ -1927,10 +1925,8 @@ with colA:
                 if reply:
                     st.markdown(reply)
                     # --- Log student answer and feedback ---
-                    if st.session_state.role == "student":
-                        with open("logs.csv", "a", encoding="utf-8") as f:
-                            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},ANSWER\n")
-                   
+                    if st.session_state.get("role") == "student":
+                            log_event("ANSWER")
                 else:
                     st.info("LLM unavailable. See corrections above and the issue breakdown.")
             else:

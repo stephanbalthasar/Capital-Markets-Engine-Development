@@ -409,10 +409,17 @@ def log_event(event_type: str):
         "event_type": [event_type],
     })
     try:
-        conn.update(spreadsheet=sheet_url, worksheet=worksheet, data=new_row, append=True)
+        # Read existing data
+        df_existing = conn.read(spreadsheet=sheet_url, worksheet=worksheet)
+        if df_existing is None or df_existing.empty:
+            df_updated = new_row
+        else:
+            df_updated = pd.concat([df_existing, new_row], ignore_index=True)
+
+        # Write back full DataFrame
+        conn.update(spreadsheet=sheet_url, worksheet=worksheet, data=df_updated)
     except Exception as e:
-        # Show a non-blocking warning so the app keeps running
-        st.warning(f"Log write failed: {e}")
+        st.warning(f"Log write failed: {e}"
 
 def _time_budget(seconds: float):
     start = time.monotonic()

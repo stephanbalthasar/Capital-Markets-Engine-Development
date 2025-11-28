@@ -1816,20 +1816,20 @@ with st.sidebar:
         st.exception(e)
 
     # --- Tutor Log Viewer ---
-if st.session_state.get("role") == "tutor":
-    st.subheader("📒 Log Book (last 7 days)")
-    lines = fetch_gist()
-    if lines:
-        import pandas as pd
-        df = pd.DataFrame(lines, columns=["timestamp", "event", "role"])
-        st.dataframe(df)
-        # Summary metrics
-        login_count = len([row for row in lines if row[1].upper() == "LOGIN"])
-        answer_count = len([row for row in lines if row[1].upper() == "ANSWER"])
-        st.metric("Student logins", login_count)
-        st.metric("Answer submissions", answer_count)
-    else:
-        st.info("No logs yet.")
+    if st.session_state.get("role") == "tutor":
+        st.subheader("📒 Log Book (last 7 days)")
+        lines = fetch_gist()
+        if lines:
+            import pandas as pd
+            df = pd.DataFrame(lines, columns=["timestamp", "event", "role"])
+            st.dataframe(df)
+            # Summary metrics
+            login_count = len([row for row in lines if row[1].upper() == "LOGIN"])
+            answer_count = len([row for row in lines if row[1].upper() == "ANSWER"])
+            st.metric("Student logins", login_count)
+            st.metric("Answer submissions", answer_count)
+        else:
+            st.info("No logs yet.")
 
 # Main UI
 # Load case data

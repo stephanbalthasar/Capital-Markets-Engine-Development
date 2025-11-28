@@ -38,6 +38,8 @@ BOOKLET = "assets/EUCapML - Course Booklet.docx"
 # Connect to Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection, ttl=0)
 sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
+worksheet = st.secrets["connections"]["gsheets"].get("worksheet", "Sheet1")
+
 
 # ---------------- Build fingerprint (to verify latest deployment) ----------------
 APP_HASH = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:10]
@@ -404,9 +406,12 @@ def get_model_answer_slice_and_issues(case_data: dict, selected_label: str, api_
 def log_event(event_type: str):
     new_row = pd.DataFrame({
         "timestamp": [time.strftime("%Y-%m-%d %H:%M:%S")],
-        "event_type": [event_type]
+        "event_type": [event_type],
     })
-    conn.update(sheet_url, new_row, append=True)
+    try:
+        conn.update(spreadsheet=sheet_url, worksheet=worksheet, data=new_row, append=True)
+    except Exception as e:
+# --- Logging Functions end ---
 
 def _time_budget(seconds: float):
     start = time.monotonic()
@@ -1788,7 +1793,11 @@ with st.sidebar:
     # --- Tutor Log Viewer ---
     if st.session_state.get("role") == "tutor":
         st.subheader("📒 Log Book (last 7 days)")
-        df = conn.read(sheet_url)
+        try:
+            df = conn.read(spreadsheet=sheet_url, worksheet=worksheet)
+        except Exception as e:
+            st.error(f"Could not read Google Sheet: {e}")
+            df = pd.DataFrame(columns=["timestamp", "event_type"])  # fallback
         if df.empty:
             st.info("No logs yet.")
         else:

@@ -1711,12 +1711,14 @@ if not st.session_state.authenticated:
             if "logs" not in st.session_state:
                 st.session_state.logs = []
             update_gist([time.strftime("%Y-%m-%d %H:%M:%S"), "LOGIN", st.session_state.role])
-            
+            st.rerun()
+    
     elif pin_input == tutor_pin:
         st.success("PIN accepted. Click CONTINUE to proceed as tutor.")
         if st.button("Continue"):
             st.session_state.authenticated = True
             st.session_state.role = "tutor"
+            st.rerun()
     elif pin_input:
         st.error("Incorrect PIN. Please try again.")
     st.stop()

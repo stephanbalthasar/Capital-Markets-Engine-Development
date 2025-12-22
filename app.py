@@ -1835,43 +1835,44 @@ with st.sidebar:
         st.error(f"Booklet not found at: {docx_source}")
     except Exception as e:
         st.exception(e)
-
-    # --- Tutor Log Viewer ---
+    
+# --- Tutor Log Viewer (last 14 days only) ---
+if st.session_state.get("role") == "tutor":
     st.subheader("📒 Log Book (last 14 days)")
     lines = fetch_gist()
-    
+
     if lines:
         import pandas as pd
         from datetime import datetime, timedelta
-    
-        # Build DataFrame from lines; header row will become NaT and be dropped by filter
+
+        # Build DataFrame from lines (header row will be handled via to_datetime errors='coerce')
         df = pd.DataFrame(lines, columns=["timestamp", "event", "role"])
-    
+
         # Parse timestamps safely; invalid rows become NaT
         df["ts"] = pd.to_datetime(
             df["timestamp"],
             format="%Y-%m-%d %H:%M:%S",
             errors="coerce",
         )
-    
+
         # Compute cutoff and filter to the past 14 days
         cutoff = datetime.now() - timedelta(days=14)
         df_14 = df[df["ts"] >= cutoff].copy()
-    
-        # Show only the filtered logs
+
         if not df_14.empty:
-            # Optional: sort descending by time
+            # Sort descending by time and render
             df_14 = df_14.sort_values("ts", ascending=False)
             st.dataframe(df_14[["timestamp", "event", "role"]], use_container_width=True)
-    
-            # Summary metrics for the same 14-day window
+
+            # Summary metrics within the same 14-day window
             login_count = (df_14["event"].str.upper() == "LOGIN").sum()
             answer_count = (df_14["event"].str.upper() == "ANSWER").sum()
             st.metric("Student logins (14d)", int(login_count))
             st.metric("Answer submissions (14d)", int(answer_count))
         else:
             st.info("No logs in the past 14 days.")
-    elseelse:
+    else:
+        st.info("No logs yet.")
 
 # Main UI
 # Load case data

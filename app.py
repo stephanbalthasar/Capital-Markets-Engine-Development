@@ -1825,21 +1825,54 @@ with st.sidebar:
     except Exception as e:
         st.exception(e)
 
-    # --- Tutor Log Viewer ---
-    if st.session_state.get("role") == "tutor":
-        st.subheader("📒 Log Book (last 7 days)")
-        lines = fetch_gist()
-        if lines:
-            import pandas as pd
-            df = pd.DataFrame(lines, columns=["timestamp", "event", "role"])
-            st.dataframe(df)
-            # Summary metrics
-            login_count = len([row for row in lines if row[1].upper() == "LOGIN"])
-            answer_count = len([row for row in lines if row[1].upper() == "ANSWER"])
-            st.metric("Student logins", login_count)
-            st.metric("Answer submissions", answer_count)
-        else:
-            st.info("No logs yet.")
+# --- Tutor Log Viewer ---
+if st.session_state.get("role") == "tutor":
+    st.subheader("📒 Log Book (last 14 days)")
+    lines = fetch_gist() or []
+
+    # Drop header row if present
+    rows = [r for r in lines if isinstance(r, (list, tuple)) and len(r) >= 3 and r[0].strip().lower() != "timestamp"]
+
+    from datetime import datetime, timedelta
+    import pandas as pd
+
+    def _parse_ts(s: str):
+        try:
+            return datetime.strptime(s.strip(), "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+
+    # Compute cutoff for 14-day window
+    cutoff = datetime.now() - timedelta(days=14)
+
+    # Separate rows for table (14 days) and metrics (all time)
+    rows_14 = []
+    rows_all = []
+    for r in rows:
+        ts = _parse_ts(r[0])
+        event = (r[1] or "").strip()
+        role = (r[2] or "").strip()
+        if ts:
+            rows_all.append({"timestamp": ts, "event": event, "role": role})
+            if ts >= cutoff:
+                rows_14.append({"timestamp": ts, "event": event, "role": role})
+
+    # Show table for last 14 days
+    if rows_14:
+        df = pd.DataFrame(rows_14).sort_values("timestamp", ascending=False)
+        st.caption("Showing entries from the last 14 days")
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("No logs in the last 14 days.")
+
+    # Metrics for ALL TIME
+    if rows_all:
+        df_all = pd.DataFrame(rows_all)
+        login_count = int((df_all["event"].str.upper() == "LOGIN").sum())
+        answer_count = int((df_all["event"].str.upper() == "ANSWER").sum())
+        st.metric("Student logins (all time)", login_count)
+        st.metric("Answer submissions (all time)", answer_count)
+       else:
 
 # Main UI
 # Load case data

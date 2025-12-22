@@ -1684,10 +1684,11 @@ if "logs" not in st.session_state:
     st.session_state.logs = []
 
 
-# --- Student / Tutor login (single-click via form) ---
+# --- Student / Tutor login (single-click via Continue button, with rerun) ---
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
+# Render ONLY the login UI until authenticated
 if not st.session_state.authenticated:
     with st.container():
         logo_col, title_col = st.columns([1, 5])
@@ -1696,42 +1697,42 @@ if not st.session_state.authenticated:
         with title_col:
             st.title("EUCapML Case Tutor")
 
-        # Use a form to make submission atomic (one click)
-        with st.form("login_form"):
-            pin_input = st.text_input("Enter your password", type="password")
+        # --- Login Block ---
+        pin_input = st.text_input("Enter your password", type="password")
 
-            # Read secrets safely at submit time
-            submitted = st.form_submit_button("Continue")
-            if submitted:
-                try:
-                    student_pin = st.secrets["STUDENT_PIN"]
-                    tutor_pin   = st.secrets["TUTOR_PIN"]
-                except KeyError:
-                    st.error("PINs not found in secrets. Please configure STUDENT_PIN and TUTOR_PIN in .streamlit/secrets.toml.")
-                    st.stop()
+        # Read secrets safely; if missing, show error and stop
+        try:
+            student_pin = st.secrets["STUDENT_PIN"]
+            tutor_pin   = st.secrets["TUTOR_PIN"]
+        except KeyError:
+            st.error("PINs not found in secrets. Please configure STUDENT_PIN and TUTOR_PIN in .streamlit/secrets.toml.")
+            st.stop()
 
-                if pin_input == student_pin:
-                    # Optional notice; forms re-render only after submit
-                    st.success("PIN accepted. You accept that this tool uses AI and answers may not be accurate. No liability is accepted.")
-                    st.session_state.authenticated = True
-                    st.session_state.role = "student"
+        # Only show success + Continue button when the entered PIN matches
+        if pin_input == student_pin:
+            st.success("PIN accepted. By clicking CONTINUE below you accept that this tool uses AI and answers may not be accurate. No liability is accepted.")
+            if st.button("Continue"):
+                st.session_state.authenticated = True
+                st.session_state.role = "student"
+                # Ensure logs list exists; optional entry
+                if "logs" not in st.session_state:
+                    st.session_state.logs = []
+                # Log the LOGIN event (answer logging happens later)
+                update_gist([time.strftime("%Y-%m-%d %H:%M:%S"), "LOGIN", "student"])
+                # Immediate transition to authenticated UI
+                st.rerun()
 
-                    # Ensure logs list exists; write LOGIN event if desired
-                    if "logs" not in st.session_state:
-                        st.session_state.logs = []
-                    update_gist([time.strftime("%Y-%m-%d %H:%M:%S"), "LOGIN", "student"])
+        elif pin_input == tutor_pin:
+            st.success("PIN accepted. Click CONTINUE to proceed as tutor.")
+            if st.button("Continue"):
+                st.session_state.authenticated = True
+                st.session_state.role = "tutor"
+                st.rerun()
 
-                    # Immediately render the authenticated UI
-                    st.rerun()
+        elif pin_input:
+            # A non-empty, incorrect PIN: show error; keep login UI
+            st.error("Incorrect PIN. Please try again.")
 
-                elif pin_input == tutor_pin:
-                    st.success("PIN accepted. Proceeding as tutor.")
-                    st.session_state.authenticated = True
-                    st.session_state.role = "tutor"
-                    st.rerun()
-                else:
-                    st.error("Incorrect PIN. Please try again.")
-       # Keep unauthenticated view only for this run
 
 # Sidebar (visible to all users after login)
 with st.sidebar:
@@ -1836,20 +1837,41 @@ with st.sidebar:
         st.exception(e)
 
     # --- Tutor Log Viewer ---
-    if st.session_state.get("role") == "tutor":
-        st.subheader("📒 Log Book (last 7 days)")
-        lines = fetch_gist()
-        if lines:
-            import pandas as pd
-            df = pd.DataFrame(lines, columns=["timestamp", "event", "role"])
-            st.dataframe(df)
-            # Summary metrics
-            login_count = len([row for row in lines if row[1].upper() == "LOGIN"])
-            answer_count = len([row for row in lines if row[1].upper() == "ANSWER"])
-            st.metric("Student logins", login_count)
-            st.metric("Answer submissions", answer_count)
+        st.subheader("📒 Log Book (last 14 days)")
+    lines = fetch_gist()
+    
+    if lines:
+        import pandas as pd
+        from datetime import datetime, timedelta
+    
+        # Build DataFrame from lines; header row will become NaT and be dropped by filter
+        df = pd.DataFrame(lines, columns=["timestamp", "event", "role"])
+    
+        # Parse timestamps safely; invalid rows become NaT
+        df["ts"] = pd.to_datetime(
+            df["timestamp"],
+            format="%Y-%m-%d %H:%M:%S",
+            errors="coerce",
+        )
+    
+        # Compute cutoff and filter to the past 14 days
+        cutoff = datetime.now() - timedelta(days=14)
+        df_14 = df[df["ts"] >= cutoff].copy()
+    
+        # Show only the filtered logs
+        if not df_14.empty:
+            # Optional: sort descending by time
+            df_14 = df_14.sort_values("ts", ascending=False)
+            st.dataframe(df_14[["timestamp", "event", "role"]], use_container_width=True)
+    
+            # Summary metrics for the same 14-day window
+            login_count = (df_14["event"].str.upper() == "LOGIN").sum()
+            answer_count = (df_14["event"].str.upper() == "ANSWER").sum()
+            st.metric("Student logins (14d)", int(login_count))
+            st.metric("Answer submissions (14d)", int(answer_count))
         else:
-            st.info("No logs yet.")
+            st.info("No logs in the past 14 days.")
+    elseelse:
 
 # Main UI
 # Load case data

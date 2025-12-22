@@ -1683,10 +1683,11 @@ st.set_page_config(
 if "logs" not in st.session_state:
     st.session_state.logs = []
 
-# Student login
+
+# --- Student / Tutor login (single-click via form) ---
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
-    
+
 if not st.session_state.authenticated:
     with st.container():
         logo_col, title_col = st.columns([1, 5])
@@ -1694,32 +1695,43 @@ if not st.session_state.authenticated:
             st.image("assets/logo.png", width=240)
         with title_col:
             st.title("EUCapML Case Tutor")
-    # --- Login Block ---
-    pin_input = st.text_input("Enter your password", type="password")
-    try:
-        student_pin = st.secrets["STUDENT_PIN"]
-        tutor_pin = st.secrets["TUTOR_PIN"]
-    except KeyError:
-        st.error("PINs not found in secrets. Please configure STUDENT_PIN and TUTOR_PIN in .streamlit/secrets.toml.")
-        st.stop()
-    if pin_input == student_pin:
-        st.success("PIN accepted. By clicking CONTINUE below you accept that this tool uses AI and answers may not be accurate. No liability is accepted.")
-        if st.button("Continue"):
-            st.session_state.authenticated = True
-            st.session_state.role = "student"
-            # Log student login
-            if "logs" not in st.session_state:
-                st.session_state.logs = []
-            update_gist([time.strftime("%Y-%m-%d %H:%M:%S"), "LOGIN", st.session_state.role])
-            
-    elif pin_input == tutor_pin:
-        st.success("PIN accepted. Click CONTINUE to proceed as tutor.")
-        if st.button("Continue"):
-            st.session_state.authenticated = True
-            st.session_state.role = "tutor"
-    elif pin_input:
-        st.error("Incorrect PIN. Please try again.")
-    st.stop()
+
+        # Use a form to make submission atomic (one click)
+        with st.form("login_form"):
+            pin_input = st.text_input("Enter your password", type="password")
+
+            # Read secrets safely at submit time
+            submitted = st.form_submit_button("Continue")
+            if submitted:
+                try:
+                    student_pin = st.secrets["STUDENT_PIN"]
+                    tutor_pin   = st.secrets["TUTOR_PIN"]
+                except KeyError:
+                    st.error("PINs not found in secrets. Please configure STUDENT_PIN and TUTOR_PIN in .streamlit/secrets.toml.")
+                    st.stop()
+
+                if pin_input == student_pin:
+                    # Optional notice; forms re-render only after submit
+                    st.success("PIN accepted. You accept that this tool uses AI and answers may not be accurate. No liability is accepted.")
+                    st.session_state.authenticated = True
+                    st.session_state.role = "student"
+
+                    # Ensure logs list exists; write LOGIN event if desired
+                    if "logs" not in st.session_state:
+                        st.session_state.logs = []
+                    update_gist([time.strftime("%Y-%m-%d %H:%M:%S"), "LOGIN", "student"])
+
+                    # Immediately render the authenticated UI
+                    st.rerun()
+
+                elif pin_input == tutor_pin:
+                    st.success("PIN accepted. Proceeding as tutor.")
+                    st.session_state.authenticated = True
+                    st.session_state.role = "tutor"
+                    st.rerun()
+                else:
+                    st.error("Incorrect PIN. Please try again.")
+       # Keep unauthenticated view only for this run
 
 # Sidebar (visible to all users after login)
 with st.sidebar:

@@ -1825,30 +1825,33 @@ with st.sidebar:
     except Exception as e:
         st.exception(e)
 
-# --- Tutor Log Viewer (toggle: 7d / 14d / All time) ---
+
+# --- Tutor Log Viewer: fixed 14-day table + metrics toggle (7d/14d/All time) ---
 if st.session_state.get("role") == "tutor":
     st.subheader("📒 Log Book")
+
     lines = fetch_gist() or []
 
     # Drop header row if present and keep only rows with at least 3 columns
-    rows_raw = [
-        r for r in lines
-        if isinstance(r, (list, tuple)) and len(r) >= 3 and r[0].strip().lower() != "timestamp"
-    ]
+    rows_raw = []
+    for r in lines:
+        if not isinstance(r, (list, tuple)) or len(r) < 3:
+            continue
+        if r[0].strip().lower() == "timestamp":
+            continue
+        rows_raw.append(r)
 
     from datetime import datetime, timedelta
     import pandas as pd
 
     def _parse_ts(s: str):
-        """
-        Parse timestamps like '2025-12-22 09:51:00'. Return None on failure.
-        """
+        """Parse 'YYYY-MM-DD HH:MM:SS' timestamps. Return None on failure."""
         try:
             return datetime.strptime(s.strip(), "%Y-%m-%d %H:%M:%S")
         except Exception:
             return None
 
-    # Normalize all rows (for metrics and optional table)
+    # Normalize all rows (for metrics and table)
     rows_all = []
     for r in rows_raw:
         ts = _parse_ts(r[0])
@@ -1858,54 +1861,55 @@ if st.session_state.get("role") == "tutor":
         role = (r[2] or "").strip()
         rows_all.append({"timestamp": ts, "event": event, "role": role})
 
-    # --- Metrics: ALL TIME ---
+    # --- Metrics: toggle window (7d / 14d / All time) ---
+    window_choice = st.selectbox(
+        "Metrics window:",
+        options=["7 days", "14 days", "All time"],
+        index=1,  # default: 14 days for metrics
+        help="Select the time window over which metrics are calculated."
+    )
+
     if rows_all:
         df_all = pd.DataFrame(rows_all)
-        login_count = int((df_all["event"].str.upper() == "LOGIN").sum())
-        answer_count = int((df_all["event"].str.upper() == "ANSWER").sum())
-        st.metric("Student logins (all time)", login_count)
-        st.metric("Answer submissions (all time)", answer_count)
+
+        # Compute cutoff based on choice (None → all time)
+        if window_choice == "7 days":
+            cutoff_metrics = datetime.now() - timedelta(days=7)
+            df_metrics = df_all[df_all["timestamp"] >= cutoff_metrics]
+            metrics_label = " (7d)"
+        elif window_choice == "14 days":
+            cutoff_metrics = datetime.now() - timedelta(days=14)
+            df_metrics = df_all[df_all["timestamp"] >= cutoff_metrics]
+            metrics_label = " (14d)"
+        else:  # All time
+            cutoff_metrics = None
+            df_metrics = df_all
+            metrics_label = " (all time)"
+
+        login_count = int((df_metrics["event"].str.upper() == "LOGIN").sum())
+        answer_count = int((df_metrics["event"].str.upper() == "ANSWER").sum())
+        st.metric(f"Student logins{metrics_label}", login_count)
+        st.metric(f"Answer submissions{metrics_label}", answer_count)
     else:
-        st.metric("Student logins (all time)", 0)
-        st.metric("Answer submissions (all time)", 0)
+        st.metric("Student logins (14d)", 0)
+        st.metric("Answer submissions (14d)", 0)
 
     st.divider()
 
-    # --- Table window toggle ---
-    window_choice = st.selectbox(
-        "Show table for:",
-        options=["7 days", "14 days", "All time"],
-        index=1,  # default: 14 days
-        help="Choose the time window for the table view."
-    )
+    # --- Table: ALWAYS last 14 days ---
+    cutoff_table = datetime.now() - timedelta(days=14)
+    rows_14 = [row for row in rows_all if row["timestamp"] >= cutoff_table]
 
-    # Compute cutoff based on choice
-    cutoff = None
-    if window_choice == "7 days":
-        cutoff = datetime.now() - timedelta(days=7)
-    elif window_choice == "14 days":
-        cutoff = datetime.now() - timedelta(days=14)
-    else:  # "All time"
-        cutoff = None
-
-    # Filter rows for the table view
-    if cutoff is None:
-        rows_table = rows_all[:]  # all time
-        caption = "Showing entries: all time"
-    else:
-        rows_table = [row for row in rows_all if row["timestamp"] >= cutoff]
-        caption = f"Showing entries from the last {window_choice.split()[0]} days"
-
-    # Render table
-    if rows_table:
-        df_tbl = pd.DataFrame(rows_table).sort_values("timestamp", ascending=False)
+    if rows_14:
+        df_tbl = pd.DataFrame(rows_14).sort_values("timestamp", ascending=False)
         # Present timestamp as string for readability
         df_tbl_display = df_tbl.assign(
             timestamp=df_tbl["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
         )
-        st.caption(caption)
-        st.dataframe(df_tbl_display        st.dataframe(df_tbl_display, use_container_width=True)
+        st.caption("Showing entries from the last 14 days")
+        st.dataframe(df_tbl_display, use_container_width=True)
     else:
+        st.info("No logs in the last 14 days.")
 
 # Main UI
 # Load case data

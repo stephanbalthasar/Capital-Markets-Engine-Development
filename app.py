@@ -1825,54 +1825,87 @@ with st.sidebar:
     except Exception as e:
         st.exception(e)
 
-# --- Tutor Log Viewer ---
+# --- Tutor Log Viewer (toggle: 7d / 14d / All time) ---
 if st.session_state.get("role") == "tutor":
-    st.subheader("📒 Log Book (last 14 days)")
+    st.subheader("📒 Log Book")
     lines = fetch_gist() or []
 
-    # Drop header row if present
-    rows = [r for r in lines if isinstance(r, (list, tuple)) and len(r) >= 3 and r[0].strip().lower() != "timestamp"]
+    # Drop header row if present and keep only rows with at least 3 columns
+    rows_raw = [
+        r for r in lines
+        if isinstance(r, (list, tuple)) and len(r) >= 3 and r[0].strip().lower() != "timestamp"
+    ]
 
     from datetime import datetime, timedelta
     import pandas as pd
 
     def _parse_ts(s: str):
+        """
+        Parse timestamps like '2025-12-22 09:51:00'. Return None on failure.
+        """
         try:
             return datetime.strptime(s.strip(), "%Y-%m-%d %H:%M:%S")
         except Exception:
             return None
 
-    # Compute cutoff for 14-day window
-    cutoff = datetime.now() - timedelta(days=14)
-
-    # Separate rows for table (14 days) and metrics (all time)
-    rows_14 = []
+    # Normalize all rows (for metrics and optional table)
     rows_all = []
-    for r in rows:
+    for r in rows_raw:
         ts = _parse_ts(r[0])
+        if not ts:
+            continue
         event = (r[1] or "").strip()
         role = (r[2] or "").strip()
-        if ts:
-            rows_all.append({"timestamp": ts, "event": event, "role": role})
-            if ts >= cutoff:
-                rows_14.append({"timestamp": ts, "event": event, "role": role})
+        rows_all.append({"timestamp": ts, "event": event, "role": role})
 
-    # Show table for last 14 days
-    if rows_14:
-        df = pd.DataFrame(rows_14).sort_values("timestamp", ascending=False)
-        st.caption("Showing entries from the last 14 days")
-        st.dataframe(df, use_container_width=True)
-    else:
-        st.info("No logs in the last 14 days.")
-
-    # Metrics for ALL TIME
+    # --- Metrics: ALL TIME ---
     if rows_all:
         df_all = pd.DataFrame(rows_all)
         login_count = int((df_all["event"].str.upper() == "LOGIN").sum())
         answer_count = int((df_all["event"].str.upper() == "ANSWER").sum())
         st.metric("Student logins (all time)", login_count)
         st.metric("Answer submissions (all time)", answer_count)
-       else:
+    else:
+        st.metric("Student logins (all time)", 0)
+        st.metric("Answer submissions (all time)", 0)
+
+    st.divider()
+
+    # --- Table window toggle ---
+    window_choice = st.selectbox(
+        "Show table for:",
+        options=["7 days", "14 days", "All time"],
+        index=1,  # default: 14 days
+        help="Choose the time window for the table view."
+    )
+
+    # Compute cutoff based on choice
+    cutoff = None
+    if window_choice == "7 days":
+        cutoff = datetime.now() - timedelta(days=7)
+    elif window_choice == "14 days":
+        cutoff = datetime.now() - timedelta(days=14)
+    else:  # "All time"
+        cutoff = None
+
+    # Filter rows for the table view
+    if cutoff is None:
+        rows_table = rows_all[:]  # all time
+        caption = "Showing entries: all time"
+    else:
+        rows_table = [row for row in rows_all if row["timestamp"] >= cutoff]
+        caption = f"Showing entries from the last {window_choice.split()[0]} days"
+
+    # Render table
+    if rows_table:
+        df_tbl = pd.DataFrame(rows_table).sort_values("timestamp", ascending=False)
+        # Present timestamp as string for readability
+        df_tbl_display = df_tbl.assign(
+            timestamp=df_tbl["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+        )
+        st.caption(caption)
+        st.dataframe(df_tbl_display        st.dataframe(df_tbl_display, use_container_width=True)
+    else:
 
 # Main UI
 # Load case data

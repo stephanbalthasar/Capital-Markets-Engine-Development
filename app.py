@@ -1837,7 +1837,7 @@ with st.sidebar:
         st.exception(e)
 
     # --- Tutor Log Viewer ---
-        st.subheader("📒 Log Book (last 14 days)")
+    st.subheader("📒 Log Book (last 14 days)")
     lines = fetch_gist()
     
     if lines:

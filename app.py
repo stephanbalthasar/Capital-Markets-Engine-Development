@@ -1964,7 +1964,7 @@ with colA:
                     st.markdown(reply)
                     # --- Log student answer and feedback ---
                     if st.session_state.role == "student":
-                        update_gist([time.strftime("%Y-%m-%d %H:%M:%S"), "LOGIN", st.session_state.role])
+                        update_gist([time.strftime("%Y-%m-%d %H:%M:%S"), "ANSWER", st.session_state.role])
                 else:
                     st.info("LLM unavailable. See corrections above and the issue breakdown.")
             else:
